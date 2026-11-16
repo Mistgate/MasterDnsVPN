@@ -1154,7 +1154,6 @@ func TestBalancerOptimizeActivePool_SessionMTUVerification(t *testing.T) {
 	}
 }
 
-
 func TestBalancer_TimeoutRecordedWhenAutoDisableOff(t *testing.T) {
 	b := NewBalancer(BalancingLeastLoss, nil)
 	b.SetAutoDisableConfig(false, 10*time.Second)

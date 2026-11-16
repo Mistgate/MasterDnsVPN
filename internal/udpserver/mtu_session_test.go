@@ -2,23 +2,17 @@ package udpserver
 
 import (
 	"encoding/binary"
-	"sync"
 	"testing"
 
+	"masterdnsvpn-go/internal/config"
 	DnsParser "masterdnsvpn-go/internal/dnsparser"
-	domainMatcher "masterdnsvpn-go/internal/domainmatcher"
 	Enums "masterdnsvpn-go/internal/enums"
+	"masterdnsvpn-go/internal/security"
 	VpnProto "masterdnsvpn-go/internal/vpnproto"
 )
 
-func TestHandleMTUDownRequestBuildsZeroFilledPayload(t *testing.T) {
-	s := &Server{
-		mtuProbePayloadPool: sync.Pool{
-			New: func() any {
-				return make([]byte, mtuProbeMaxDownSize)
-			},
-		},
-	}
+func TestAuthenticatedMTUDownProbeBuildsEncryptedPayload(t *testing.T) {
+	s, credential := newProtocolTestServer(t, config.DefaultServerConfig(), nil)
 
 	query, err := DnsParser.BuildTXTQuestionPacket("x.v.example.com", Enums.DNS_RECORD_TYPE_TXT, 4096)
 	if err != nil {
@@ -30,8 +24,7 @@ func TestHandleMTUDownRequestBuildsZeroFilledPayload(t *testing.T) {
 	copy(payload[1:1+mtuProbeCodeLength], []byte{1, 2, 3, 4})
 	binary.BigEndian.PutUint16(payload[mtuProbeUpMinSize:mtuProbeDownMinSize], 40)
 
-	response := s.handleMTUDownRequest(query, DnsParser.LitePacket{}, domainMatcher.Decision{RequestName: "x.v.example.com"}, VpnProto.Packet{
-		SessionID:   9,
+	response := s.handleAuthenticatedMTUProbe(query, "x.v.example.com", credential, VpnProto.Packet{
 		PacketType:  Enums.PACKET_MTU_DOWN_REQ,
 		StreamID:    1,
 		SequenceNum: 2,
@@ -41,9 +34,17 @@ func TestHandleMTUDownRequestBuildsZeroFilledPayload(t *testing.T) {
 		t.Fatal("expected response packet")
 	}
 
-	packet, err := DnsParser.ExtractVPNResponse(response, false)
+	envelope, err := DnsParser.ExtractVPNResponsePayload(response, false)
 	if err != nil {
-		t.Fatalf("ExtractVPNResponse returned error: %v", err)
+		t.Fatalf("ExtractVPNResponsePayload returned error: %v", err)
+	}
+	probe, err := security.OpenProbeWithCredential(envelope, credential)
+	if err != nil {
+		t.Fatalf("OpenProbeWithCredential returned error: %v", err)
+	}
+	packet, err := VpnProto.ParseInflated(probe.Payload)
+	if err != nil {
+		t.Fatalf("ParseInflated returned error: %v", err)
 	}
 	if packet.PacketType != Enums.PACKET_MTU_DOWN_RES {
 		t.Fatalf("unexpected packet type: got=%d want=%d", packet.PacketType, Enums.PACKET_MTU_DOWN_RES)

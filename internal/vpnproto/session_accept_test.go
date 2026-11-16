@@ -58,10 +58,9 @@ func TestSessionAcceptClientPolicyRoundTrip(t *testing.T) {
 	}
 }
 
-func TestSessionAcceptPayloadRoundTrip(t *testing.T) {
+func TestSessionAcceptV1PolicyRoundTrip(t *testing.T) {
 	payload := SessionAcceptPayload{
 		SessionID:       7,
-		SessionCookie:   11,
 		CompressionPair: 3,
 		VerifyCode:      [4]byte{1, 2, 3, 4},
 		ClientPolicy: SessionAcceptClientPolicy{
@@ -80,14 +79,14 @@ func TestSessionAcceptPayloadRoundTrip(t *testing.T) {
 		HasClientPolicySync: true,
 	}
 
-	encoded := EncodeSessionAcceptPayload(payload)
-	decoded, err := DecodeSessionAcceptPayload(encoded)
+	encoded := EncodeSessionAcceptV1Policy(payload)
+	decoded, err := DecodeSessionAcceptV1Policy(payload.SessionID, encoded)
 	if err != nil {
-		t.Fatalf("DecodeSessionAcceptPayload returned error: %v", err)
+		t.Fatalf("DecodeSessionAcceptV1Policy returned error: %v", err)
 	}
 
-	if decoded.SessionID != payload.SessionID || decoded.SessionCookie != payload.SessionCookie {
-		t.Fatalf("unexpected decoded identity: got=(%d,%d) want=(%d,%d)", decoded.SessionID, decoded.SessionCookie, payload.SessionID, payload.SessionCookie)
+	if decoded.SessionID != payload.SessionID {
+		t.Fatalf("unexpected decoded session id: got=%d want=%d", decoded.SessionID, payload.SessionID)
 	}
 	if decoded.CompressionPair != payload.CompressionPair {
 		t.Fatalf("unexpected compression pair: got=%d want=%d", decoded.CompressionPair, payload.CompressionPair)

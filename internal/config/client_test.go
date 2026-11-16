@@ -28,8 +28,6 @@ PROTOCOL_TYPE = "socks5"
 DOMAINS = ["V.Domain.com", "v.domain.com."]
 RESOLVER_BALANCING_STRATEGY = 2
 BASE_ENCODE_DATA = true
-DATA_ENCRYPTION_METHOD = 1
-ENCRYPTION_KEY = "secret"
 MIN_UPLOAD_MTU = 70
 MIN_DOWNLOAD_MTU = 150
 MAX_UPLOAD_MTU = 150
@@ -85,8 +83,6 @@ func TestLoadClientConfigTrimsFDControlUnixSocket(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte(`
 PROTOCOL_TYPE = "SOCKS5"
 DOMAINS = ["v.domain.com"]
-DATA_ENCRYPTION_METHOD = 1
-ENCRYPTION_KEY = "secret"
 FD_CONTROL_UNIX_SOCKET = " /tmp/masterdnsvpn-protect.sock "
 `), 0o644); err != nil {
 		t.Fatalf("WriteFile config failed: %v", err)
@@ -105,52 +101,6 @@ FD_CONTROL_UNIX_SOCKET = " /tmp/masterdnsvpn-protect.sock "
 	}
 }
 
-func TestLoadClientConfigAllowsEmptyKeyWhenEncryptionNone(t *testing.T) {
-	dir := t.TempDir()
-
-	configPath := filepath.Join(dir, "client_config.toml")
-	resolversPath := filepath.Join(dir, "client_resolvers.txt")
-
-	if err := os.WriteFile(configPath, []byte(`
-PROTOCOL_TYPE = "SOCKS5"
-DOMAINS = ["v.domain.com"]
-DATA_ENCRYPTION_METHOD = 0
-ENCRYPTION_KEY = ""
-`), 0o644); err != nil {
-		t.Fatalf("WriteFile config failed: %v", err)
-	}
-	if err := os.WriteFile(resolversPath, []byte("8.8.8.8\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile resolvers failed: %v", err)
-	}
-
-	if _, err := LoadClientConfig(configPath); err != nil {
-		t.Fatalf("expected empty key to be allowed with DATA_ENCRYPTION_METHOD = 0, got: %v", err)
-	}
-}
-
-func TestLoadClientConfigRejectsEmptyKeyWhenEncryptionEnabled(t *testing.T) {
-	dir := t.TempDir()
-
-	configPath := filepath.Join(dir, "client_config.toml")
-	resolversPath := filepath.Join(dir, "client_resolvers.txt")
-
-	if err := os.WriteFile(configPath, []byte(`
-PROTOCOL_TYPE = "SOCKS5"
-DOMAINS = ["v.domain.com"]
-DATA_ENCRYPTION_METHOD = 1
-ENCRYPTION_KEY = ""
-`), 0o644); err != nil {
-		t.Fatalf("WriteFile config failed: %v", err)
-	}
-	if err := os.WriteFile(resolversPath, []byte("8.8.8.8\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile resolvers failed: %v", err)
-	}
-
-	if _, err := LoadClientConfig(configPath); err == nil {
-		t.Fatal("expected empty key to be rejected when encryption is enabled")
-	}
-}
-
 func TestLoadClientConfigRejectsInvalidProtocol(t *testing.T) {
 	dir := t.TempDir()
 
@@ -160,8 +110,6 @@ func TestLoadClientConfigRejectsInvalidProtocol(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte(`
 PROTOCOL_TYPE = "udp"
 DOMAINS = ["v.domain.com"]
-DATA_ENCRYPTION_METHOD = 1
-ENCRYPTION_KEY = "secret"
 `), 0o644); err != nil {
 		t.Fatalf("WriteFile config failed: %v", err)
 	}
@@ -184,8 +132,6 @@ func TestLoadClientConfigRejectsInvalidResolverBalancingStrategy(t *testing.T) {
 PROTOCOL_TYPE = "SOCKS5"
 DOMAINS = ["v.domain.com"]
 RESOLVER_BALANCING_STRATEGY = 10
-DATA_ENCRYPTION_METHOD = 1
-ENCRYPTION_KEY = "secret"
 `), 0o644); err != nil {
 		t.Fatalf("WriteFile config failed: %v", err)
 	}
@@ -211,8 +157,6 @@ func TestLoadClientConfigResolverBalancingStrategyDefaultAndExplicit(t *testing.
 PROTOCOL_TYPE = "SOCKS5"
 DOMAINS = ["v.domain.com"]
 RESOLVERS_FILE_PATH = "client_resolvers.txt"
-DATA_ENCRYPTION_METHOD = 1
-ENCRYPTION_KEY = "secret"
 `), 0o644); err != nil {
 		t.Fatalf("WriteFile config failed: %v", err)
 	}
@@ -231,8 +175,6 @@ PROTOCOL_TYPE = "SOCKS5"
 DOMAINS = ["v.domain.com"]
 RESOLVERS_FILE_PATH = "client_resolvers.txt"
 RESOLVER_BALANCING_STRATEGY = 9
-DATA_ENCRYPTION_METHOD = 1
-ENCRYPTION_KEY = "secret"
 `), 0o644); err != nil {
 		t.Fatalf("WriteFile config failed: %v", err)
 	}
@@ -251,8 +193,6 @@ PROTOCOL_TYPE = "SOCKS5"
 DOMAINS = ["v.domain.com"]
 RESOLVERS_FILE_PATH = "client_resolvers.txt"
 RESOLVER_BALANCING_STRATEGY = 6
-DATA_ENCRYPTION_METHOD = 1
-ENCRYPTION_KEY = "secret"
 `), 0o644); err != nil {
 		t.Fatalf("WriteFile config failed: %v", err)
 	}
@@ -284,8 +224,6 @@ COMPRESSION_MIN_SIZE = 0
 MTU_TEST_RETRIES = 0
 MTU_TEST_TIMEOUT = 0
 MTU_TEST_PARALLELISM = 0
-DATA_ENCRYPTION_METHOD = 1
-ENCRYPTION_KEY = "secret"
 `), 0o644); err != nil {
 		t.Fatalf("WriteFile config failed: %v", err)
 	}
@@ -339,8 +277,6 @@ DOMAINS = ["v.domain.com"]
 SOCKS5_AUTH = true
 SOCKS5_USER = "user_only"
 SOCKS5_PASS = ""
-DATA_ENCRYPTION_METHOD = 1
-ENCRYPTION_KEY = "secret"
 `), 0o644); err != nil {
 		t.Fatalf("WriteFile config failed: %v", err)
 	}
@@ -367,8 +303,6 @@ func TestLoadClientConfigAllowsShortAutoDisableWindowForQuickTesting(t *testing.
 	if err := os.WriteFile(configPath, []byte(`
 PROTOCOL_TYPE = "SOCKS5"
 DOMAINS = ["v.domain.com"]
-DATA_ENCRYPTION_METHOD = 1
-ENCRYPTION_KEY = "secret"
 AUTO_DISABLE_TIMEOUT_SERVERS = true
 AUTO_DISABLE_TIMEOUT_WINDOW_SECONDS = 3.0
 `), 0o644); err != nil {
@@ -397,8 +331,6 @@ func TestLoadClientConfigUsesMergedRX_TX_Workers(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte(`
 PROTOCOL_TYPE = "SOCKS5"
 DOMAINS = ["v.domain.com"]
-DATA_ENCRYPTION_METHOD = 1
-ENCRYPTION_KEY = "secret"
 RX_TX_WORKERS = 9
 TUNNEL_PROCESS_WORKERS = 2
 `), 0o644); err != nil {
@@ -430,8 +362,6 @@ func TestLoadClientConfigFallsBackToLegacyReaderWriterWorkers(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte(`
 PROTOCOL_TYPE = "SOCKS5"
 DOMAINS = ["v.domain.com"]
-DATA_ENCRYPTION_METHOD = 1
-ENCRYPTION_KEY = "secret"
 TUNNEL_READER_WORKERS = 3
 TUNNEL_WRITER_WORKERS = 9
 TUNNEL_PROCESS_WORKERS = 2
@@ -464,8 +394,6 @@ func TestLoadClientConfigAutoDerivesTunnelProcessWorkersAboveRXTX(t *testing.T) 
 	if err := os.WriteFile(configPath, []byte(`
 PROTOCOL_TYPE = "SOCKS5"
 DOMAINS = ["v.domain.com"]
-DATA_ENCRYPTION_METHOD = 1
-ENCRYPTION_KEY = "secret"
 RX_TX_WORKERS = 6
 `), 0o644); err != nil {
 		t.Fatalf("WriteFile config failed: %v", err)
@@ -494,8 +422,6 @@ func TestLoadClientConfigWithOverridesReplacesResolversDomainsAndMTURange(t *tes
 	if err := os.WriteFile(configPath, []byte(`
 PROTOCOL_TYPE = "SOCKS5"
 DOMAINS = ["config.domain.com"]
-DATA_ENCRYPTION_METHOD = 1
-ENCRYPTION_KEY = "secret"
 MIN_UPLOAD_MTU = 40
 MAX_UPLOAD_MTU = 64
 MIN_DOWNLOAD_MTU = 100
@@ -553,7 +479,7 @@ func TestClientConfigFlagBinderBuildsOverridesForSetFlagsOnly(t *testing.T) {
 		"-domains=a.example.com,b.example.com",
 		"-min-upload-mtu=70",
 		"-max-download-mtu=220",
-		"-encryption-key=override-secret",
+		"-device-credential=0102030405060708.0000000000000000000000000000000000000000000000000000000000000000",
 		"-base-encode-data",
 	}); err != nil {
 		t.Fatalf("flag parse failed: %v", err)
@@ -566,8 +492,8 @@ func TestClientConfigFlagBinderBuildsOverridesForSetFlagsOnly(t *testing.T) {
 	if got, ok := overrides.Values["MaxDownloadMTU"].(int); !ok || got != 220 {
 		t.Fatalf("unexpected max download mtu override: %#v", overrides.Values["MaxDownloadMTU"])
 	}
-	if got, ok := overrides.Values["EncryptionKey"].(string); !ok || got != "override-secret" {
-		t.Fatalf("unexpected encryption key override: %#v", overrides.Values["EncryptionKey"])
+	if got, ok := overrides.Values["DeviceCredential"].(string); !ok || got != "0102030405060708.0000000000000000000000000000000000000000000000000000000000000000" {
+		t.Fatalf("unexpected device credential override: %#v", overrides.Values["DeviceCredential"])
 	}
 	if got, ok := overrides.Values["BaseEncodeData"].(bool); !ok || !got {
 		t.Fatalf("unexpected base encode override: %#v", overrides.Values["BaseEncodeData"])
@@ -591,8 +517,6 @@ func TestLoadClientConfigFallsBackToJSONWhenTOMLIsMissing(t *testing.T) {
 	if err := os.WriteFile(jsonPath, []byte(`{
   "PROTOCOL_TYPE": "SOCKS5",
   "DOMAINS": ["json.example.com"],
-  "DATA_ENCRYPTION_METHOD": 1,
-  "ENCRYPTION_KEY": "json-secret",
   "MAX_UPLOAD_MTU": 140
 }`), 0o644); err != nil {
 		t.Fatalf("WriteFile JSON config failed: %v", err)
@@ -638,9 +562,7 @@ func TestLoadClientConfigFromJSONBase64AppliesDefaultsAndLoadsResolvers(t *testi
 
 	rawJSON := `{
   "PROTOCOL_TYPE": "SOCKS5",
-  "DOMAINS": ["base64.example.com"],
-  "DATA_ENCRYPTION_METHOD": 1,
-  "ENCRYPTION_KEY": "base64-secret"
+	  "DOMAINS": ["base64.example.com"]
 }`
 	encoded := base64.StdEncoding.EncodeToString([]byte(rawJSON))
 
@@ -669,16 +591,15 @@ func TestLoadClientConfigFromJSONBase64WithOverridesAppliesBeforeFinalize(t *tes
 	}
 
 	rawJSON := `{
-  "PROTOCOL_TYPE": "SOCKS5",
-  "DATA_ENCRYPTION_METHOD": 1
+	  "PROTOCOL_TYPE": "SOCKS5"
 }`
 	encoded := base64.StdEncoding.EncodeToString([]byte(rawJSON))
 
 	cfg, err := LoadClientConfigFromJSONBase64WithOverrides(encoded, ClientConfigOverrides{
 		ResolversFilePath: &overrideResolversPath,
 		Values: map[string]any{
-			"Domains":       []string{"override.example.com"},
-			"EncryptionKey": "override-secret",
+			"Domains":          []string{"override.example.com"},
+			"DeviceCredential": "1111111111111111.2222222222222222222222222222222222222222222222222222222222222222",
 		},
 	})
 	if err != nil {
@@ -688,8 +609,8 @@ func TestLoadClientConfigFromJSONBase64WithOverridesAppliesBeforeFinalize(t *tes
 	if len(cfg.Domains) != 1 || cfg.Domains[0] != "override.example.com" {
 		t.Fatalf("unexpected override domains: %+v", cfg.Domains)
 	}
-	if cfg.EncryptionKey != "override-secret" {
-		t.Fatalf("unexpected override encryption key: got=%q", cfg.EncryptionKey)
+	if cfg.DeviceCredential != "1111111111111111.2222222222222222222222222222222222222222222222222222222222222222" {
+		t.Fatalf("unexpected override device credential: got=%q", cfg.DeviceCredential)
 	}
 	if cfg.ResolverMap["9.9.9.9"] != 53 {
 		t.Fatalf("expected override resolvers to be loaded, got=%d", cfg.ResolverMap["9.9.9.9"])
@@ -705,8 +626,6 @@ func TestLoadClientConfigMicroBurstKnobs(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte(`
 PROTOCOL_TYPE = "SOCKS5"
 DOMAINS = ["v.domain.com"]
-DATA_ENCRYPTION_METHOD = 1
-ENCRYPTION_KEY = "secret"
 MICRO_BURST_TEST_ENABLED = true
 MICRO_BURST_PACKET_COUNT = 8
 MICRO_BURST_PARALLELISM = 12
@@ -756,8 +675,6 @@ RECHECK_BURST_PACKET_COUNT = 5
 	if err := os.WriteFile(configPath, []byte(`
 PROTOCOL_TYPE = "SOCKS5"
 DOMAINS = ["v.domain.com"]
-DATA_ENCRYPTION_METHOD = 1
-ENCRYPTION_KEY = "secret"
 MICRO_BURST_PARALLELISM = 128
 RECHECK_BURST_PACKET_COUNT = 32
 `), 0o644); err != nil {
@@ -778,8 +695,6 @@ RECHECK_BURST_PACKET_COUNT = 32
 	if err := os.WriteFile(configPath, []byte(`
 PROTOCOL_TYPE = "SOCKS5"
 DOMAINS = ["v.domain.com"]
-DATA_ENCRYPTION_METHOD = 1
-ENCRYPTION_KEY = "secret"
 MICRO_BURST_PARALLELISM = 256
 RECHECK_BURST_PACKET_COUNT = 64
 `), 0o644); err != nil {
@@ -805,8 +720,6 @@ func TestLoadClientConfigRuntimeStatsKnobs(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte(`
 PROTOCOL_TYPE = "SOCKS5"
 DOMAINS = ["example.com"]
-DATA_ENCRYPTION_METHOD = 1
-ENCRYPTION_KEY = "test-secret"
 RUNTIME_STATS_INTERVAL_SECONDS = 45.0
 INTERACTIVE_STATS_ENABLED = true
 `), 0o644); err != nil {

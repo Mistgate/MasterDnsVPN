@@ -62,7 +62,7 @@ func TestLiveObservationsPersistRankings(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				cfg := config.DefaultClientConfig()
 				cfg.AutoSaveRankedResolvers = false
-				c := New(cfg, nil, nil)
+				c := New(cfg, nil, clientTestCredential())
 				defer c.Close()
 				var mu sync.Mutex
 				var saved [][]config.ResolverAddress

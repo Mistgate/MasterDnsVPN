@@ -24,13 +24,13 @@ import (
 	"testing"
 	"time"
 
+	baseCodec "masterdnsvpn-go/internal/basecodec"
 	"masterdnsvpn-go/internal/config"
 	"masterdnsvpn-go/internal/dnsparser"
 	"masterdnsvpn-go/internal/domainmatcher"
 	"masterdnsvpn-go/internal/enums"
 	"masterdnsvpn-go/internal/logger"
 	"masterdnsvpn-go/internal/security"
-	"masterdnsvpn-go/internal/udpserver"
 	"masterdnsvpn-go/internal/vpnproto"
 )
 
@@ -60,10 +60,7 @@ func startAcceptanceResolver(t *testing.T, server string, delay time.Duration, d
 	}
 	r := &acceptanceResolver{conn: conn, done: make(chan struct{})}
 	matcher := domainmatcher.New(domains, 3)
-	codec, err := security.NewCodec(0, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	index, _ := security.NewMemoryCredentialIndex([]security.Credential{clientTestCredential()})
 	go func() {
 		defer close(r.done)
 		query, reply := make([]byte, 4096), make([]byte, 4096)
@@ -77,8 +74,10 @@ func startAcceptanceResolver(t *testing.T, server string, delay time.Duration, d
 			if parsed, err := dnsparser.ParseDNSRequestLite(query[:n]); err == nil {
 				decision := matcher.Match(parsed)
 				if decision.Action == domainmatcher.ActionProcess {
-					packet, err := vpnproto.ParseInflatedFromLabels(decision.Labels, codec)
-					if err == nil && (packet.PacketType == enums.PACKET_MTU_UP_REQ || packet.PacketType == enums.PACKET_MTU_DOWN_REQ) {
+					wire, err := baseCodec.DecodeString(decision.Labels)
+					_, probe, openErr := security.OpenProbe(wire, index)
+					packet, parseErr := vpnproto.ParseInflated(probe.Payload)
+					if err == nil && openErr == nil && parseErr == nil && (packet.PacketType == enums.PACKET_MTU_UP_REQ || packet.PacketType == enums.PACKET_MTU_DOWN_REQ) {
 						r.mu.Lock()
 						r.probeTimes = append(r.probeTimes, receivedAt)
 						r.mu.Unlock()
@@ -107,11 +106,7 @@ func startAcceptanceResolver(t *testing.T, server string, delay time.Duration, d
 
 func newAcceptanceClient(t *testing.T, cfg config.ClientConfig) *Client {
 	t.Helper()
-	codec, err := security.NewCodec(cfg.DataEncryptionMethod, cfg.EncryptionKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c := New(cfg, logger.New("acceptance-client", "error"), codec)
+	c := New(cfg, logger.New("acceptance-client", "error"), clientTestCredential())
 	t.Cleanup(c.Close)
 	if err := c.BuildConnectionMap(); err != nil {
 		t.Fatal(err)
@@ -150,13 +145,9 @@ func TestIntegratedResolverManagerAcceptance(t *testing.T) {
 	serverCfg.UDPReaders, serverCfg.DNSRequestWorkers = 1, 2
 	serverCfg.ProtocolType, serverCfg.ForwardIP = "TCP", "127.0.0.1"
 	serverCfg.ForwardPort = destination.Addr().(*net.TCPAddr).Port
-	serverCfg.Domain, serverCfg.DataEncryptionMethod = domains, 0
+	serverCfg.Domain = domains
 	serverCfg.MinVPNLabelLength = 3
-	codec, err := security.NewCodec(0, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	server := udpserver.New(serverCfg, logger.New("acceptance-server", "error"), codec)
+	server := clientTestUDPServer(serverCfg, logger.New("acceptance-server", "error"))
 	serverCtx, stopServer := context.WithCancel(context.Background())
 	serverDone := make(chan error, 1)
 	go func() { serverDone <- server.Run(serverCtx) }()
@@ -176,7 +167,6 @@ func TestIntegratedResolverManagerAcceptance(t *testing.T) {
 	}
 	cfg := config.DefaultClientConfig()
 	cfg.ProtocolType, cfg.ListenIP, cfg.ListenPort = "TCP", "127.0.0.1", 0
-	cfg.DataEncryptionMethod = 0
 	cfg.Domains = domains
 	cfg.Resolvers = nil
 	var lines strings.Builder

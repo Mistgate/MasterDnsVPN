@@ -1,8 +1,9 @@
 package client
 
 import (
-	"bytes"
 	"context"
+	"crypto/ecdh"
+	"crypto/rand"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -65,33 +66,26 @@ func TestApplySessionInitPacketAppliesServerClientPolicy(t *testing.T) {
 	c.syncedDownloadMTU = 5000
 
 	verifyCode := [4]byte{1, 2, 3, 4}
-	initPayload := make([]byte, sessionInitPayloadSize)
-	initPayload[0] = 1
-
-	var payload [VpnProto.SessionAcceptPayloadSize]byte
-	payload[0] = 7
-	payload[1] = 9
-	payload[2] = compression.PackPair(compression.TypeOff, compression.TypeOff)
-	copy(payload[3:7], verifyCode[:])
-	policy := VpnProto.EncodeSessionAcceptClientPolicy(VpnProto.SessionAcceptClientPolicy{
-		MaxPacketDuplicationCount: 5,
-		MaxSetupDuplicationCount:  6,
-		MaxUploadMTU:              150,
-		MaxDownloadMTU:            4000,
-		MaxRxTxWorkers:            4,
-		MinPingAggressiveInterval: 0.05,
-		MaxPacketsPerBatch:        10,
-		MaxARQWindowSize:          8000,
-		MaxARQDataNackMaxGap:      128,
-		MinCompressionMinSize:     120,
-		MinARQInitialRTOSeconds:   0.05,
-	})
-	copy(payload[VpnProto.SessionAcceptBasePayloadSize:], policy[:])
-
-	err := c.applySessionInitPacket(VpnProto.Packet{
-		PacketType: Enums.PACKET_SESSION_ACCEPT,
-		Payload:    payload[:],
-	}, initPayload, verifyCode)
+	acceptPayload := VpnProto.SessionAcceptPayload{
+		SessionID:       7,
+		CompressionPair: compression.PackPair(compression.TypeOff, compression.TypeOff),
+		VerifyCode:      verifyCode,
+		ClientPolicy: VpnProto.SessionAcceptClientPolicy{
+			MaxPacketDuplicationCount: 5,
+			MaxSetupDuplicationCount:  6,
+			MaxUploadMTU:              150,
+			MaxDownloadMTU:            4000,
+			MaxRxTxWorkers:            4,
+			MinPingAggressiveInterval: 0.05,
+			MaxPacketsPerBatch:        10,
+			MaxARQWindowSize:          8000,
+			MaxARQDataNackMaxGap:      128,
+			MinCompressionMinSize:     120,
+			MinARQInitialRTOSeconds:   0.05,
+		},
+		HasClientPolicySync: true,
+	}
+	err := c.applySessionInitPacket(buildTestSessionAccept(t, c, acceptPayload), verifyCode)
 	if err != nil {
 		t.Fatalf("applySessionInitPacket returned error: %v", err)
 	}
@@ -99,8 +93,8 @@ func TestApplySessionInitPacketAppliesServerClientPolicy(t *testing.T) {
 	if !c.sessionReady {
 		t.Fatal("expected session to become ready")
 	}
-	if c.sessionID != 7 || c.sessionCookie != 9 {
-		t.Fatalf("unexpected session identity: id=%d cookie=%d", c.sessionID, c.sessionCookie)
+	if c.sessionID != 7 {
+		t.Fatalf("unexpected session identity: id=%d", c.sessionID)
 	}
 	if c.cfg.PacketDuplicationCount != 5 {
 		t.Fatalf("unexpected packet duplication clamp: got=%d want=%d", c.cfg.PacketDuplicationCount, 5)
@@ -162,32 +156,6 @@ func TestApplySessionInitPacketAppliesServerClientPolicy(t *testing.T) {
 	if c.dnsResponses == nil {
 		t.Fatal("expected dns response fragment store to be rebuilt")
 	}
-	if !bytes.Equal(payload[3:7], verifyCode[:]) {
-		t.Fatal("verify code should remain in legacy position")
-	}
-}
-
-func TestApplySessionInitPacketAcceptsLegacySessionAcceptPayload(t *testing.T) {
-	c := buildTestClientWithResolvers(config.ClientConfig{}, "a")
-	verifyCode := [4]byte{4, 3, 2, 1}
-	initPayload := make([]byte, sessionInitPayloadSize)
-
-	payload := make([]byte, VpnProto.SessionAcceptBasePayloadSize)
-	payload[0] = 3
-	payload[1] = 5
-	payload[2] = compression.PackPair(compression.TypeOff, compression.TypeOff)
-	copy(payload[3:7], verifyCode[:])
-
-	err := c.applySessionInitPacket(VpnProto.Packet{
-		PacketType: Enums.PACKET_SESSION_ACCEPT,
-		Payload:    payload,
-	}, initPayload, verifyCode)
-	if err != nil {
-		t.Fatalf("legacy session accept should still work, got error: %v", err)
-	}
-	if !c.sessionReady {
-		t.Fatal("expected legacy session accept to mark session ready")
-	}
 }
 
 func TestApplySessionInitPacketPreservesHigherTunnelProcessWorkers(t *testing.T) {
@@ -213,36 +181,27 @@ func TestApplySessionInitPacketPreservesHigherTunnelProcessWorkers(t *testing.T)
 	c.tunnelProcessWorkers = 200
 
 	verifyCode := [4]byte{1, 2, 3, 4}
-	var payload [VpnProto.SessionAcceptPayloadSize]byte
-	payload[0] = 9
-	payload[1] = 8
-	payload[2] = compression.PackPair(compression.TypeOff, compression.TypeOff)
-	copy(payload[3:7], verifyCode[:])
-
-	policy := VpnProto.EncodeSessionAcceptClientPolicy(VpnProto.SessionAcceptClientPolicy{
-		MaxPacketDuplicationCount: 5,
-		MaxSetupDuplicationCount:  6,
-		MaxUploadMTU:              150,
-		MaxDownloadMTU:            4000,
-		MaxRxTxWorkers:            4,
-		MinPingAggressiveInterval: 0.05,
-		MaxPacketsPerBatch:        10,
-		MaxARQWindowSize:          8000,
-		MaxARQDataNackMaxGap:      128,
-		MinCompressionMinSize:     120,
-		MinARQInitialRTOSeconds:   0.05,
-	})
-	copy(payload[VpnProto.SessionAcceptBasePayloadSize:], policy[:])
-
-	packet := VpnProto.Packet{
-		PacketType: Enums.PACKET_SESSION_ACCEPT,
-		Payload:    payload[:],
+	acceptPayload := VpnProto.SessionAcceptPayload{
+		SessionID:       9,
+		CompressionPair: compression.PackPair(compression.TypeOff, compression.TypeOff),
+		VerifyCode:      verifyCode,
+		ClientPolicy: VpnProto.SessionAcceptClientPolicy{
+			MaxPacketDuplicationCount: 5,
+			MaxSetupDuplicationCount:  6,
+			MaxUploadMTU:              150,
+			MaxDownloadMTU:            4000,
+			MaxRxTxWorkers:            4,
+			MinPingAggressiveInterval: 0.05,
+			MaxPacketsPerBatch:        10,
+			MaxARQWindowSize:          8000,
+			MaxARQDataNackMaxGap:      128,
+			MinCompressionMinSize:     120,
+			MinARQInitialRTOSeconds:   0.05,
+		},
+		HasClientPolicySync: true,
 	}
 
-	initPayload := make([]byte, sessionInitPayloadSize)
-	initPayload[0] = 1
-
-	if err := c.applySessionInitPacket(packet, initPayload, verifyCode); err != nil {
+	if err := c.applySessionInitPacket(buildTestSessionAccept(t, c, acceptPayload), verifyCode); err != nil {
 		t.Fatalf("applySessionInitPacket returned error: %v", err)
 	}
 
@@ -290,10 +249,7 @@ func listenTestResolver(t *testing.T, key string) (*net.UDPConn, *Connection) {
 func newSessionInitTestClient(t *testing.T, cfg config.ClientConfig, inactive ...*Connection) (*Client, *net.UDPConn) {
 	t.Helper()
 
-	codec, err := security.NewCodec(0, "")
-	if err != nil {
-		t.Fatalf("NewCodec returned error: %v", err)
-	}
+	codec := clientTestCredential()
 
 	resolver, conn := listenTestResolver(t, "a")
 	c := New(cfg, nil, codec)
@@ -305,10 +261,45 @@ func newSessionInitTestClient(t *testing.T, cfg config.ClientConfig, inactive ..
 	return c, resolver
 }
 
-func sessionAcceptTestPayload(verifyCode [4]byte) []byte {
-	return VpnProto.EncodeSessionAcceptPayload(VpnProto.SessionAcceptPayload{
+func buildTestSessionAccept(t *testing.T, c *Client, payload VpnProto.SessionAcceptPayload) []byte {
+	t.Helper()
+	if c.sessionHandshake == nil {
+		var parameters [security.InitParametersSize]byte
+		parameters[1] = compression.PackPair(compression.TypeOff, compression.TypeOff)
+		copy(parameters[6:], payload.VerifyCode[:])
+		handshake, initMessage, err := security.NewClientHandshake(c.credential, parameters, time.Now(), rand.Reader)
+		if err != nil {
+			t.Fatalf("NewClientHandshake failed: %v", err)
+		}
+		c.sessionHandshake = handshake
+		c.sessionInitMessage = initMessage
+		c.sessionInitPayload = append([]byte(nil), parameters[:]...)
+	}
+	serverEphemeral, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate test server ephemeral: %v", err)
+	}
+	message, _, err := security.BuildSessionAccept(
+		c.credential,
+		c.sessionInitMessage,
+		payload.SessionID,
+		VpnProto.EncodeSessionAcceptV1Policy(payload),
+		serverEphemeral,
+	)
+	if err != nil {
+		t.Fatalf("BuildSessionAccept failed: %v", err)
+	}
+	return message
+}
+
+// answerSessionInitQueries answers every query the resolver socket receives
+// with a SESSION_ACCEPT for verifyCode, as the server answers each SESSION_INIT
+// query that initializeSessionRequest races. It returns the number of queries
+// answered so far.
+func answerSessionInitQueries(t *testing.T, c *Client, resolver *net.UDPConn, verifyCode [4]byte, base64Reply bool) *atomic.Int32 {
+	t.Helper()
+	accept := buildTestSessionAccept(t, c, VpnProto.SessionAcceptPayload{
 		SessionID:       7,
-		SessionCookie:   9,
 		CompressionPair: compression.PackPair(compression.TypeOff, compression.TypeOff),
 		VerifyCode:      verifyCode,
 		ClientPolicy: VpnProto.SessionAcceptClientPolicy{
@@ -317,14 +308,6 @@ func sessionAcceptTestPayload(verifyCode [4]byte) []byte {
 		},
 		HasClientPolicySync: true,
 	})
-}
-
-// answerSessionInitQueries answers every query the resolver socket receives
-// with a SESSION_ACCEPT for verifyCode, as the server answers each SESSION_INIT
-// query that initializeSessionRequest races. It returns the number of queries
-// answered so far.
-func answerSessionInitQueries(resolver *net.UDPConn, verifyCode [4]byte, base64Reply bool) *atomic.Int32 {
-	payload := sessionAcceptTestPayload(verifyCode)
 	answered := &atomic.Int32{}
 	go func() {
 		buf := make([]byte, 4096)
@@ -338,10 +321,7 @@ func answerSessionInitQueries(resolver *net.UDPConn, verifyCode [4]byte, base64R
 			if err != nil || len(parsed.Questions) == 0 {
 				continue
 			}
-			response, err := DnsParser.BuildVPNResponsePacket(query, parsed.Questions[0].Name, VpnProto.Packet{
-				PacketType: Enums.PACKET_SESSION_ACCEPT,
-				Payload:    payload,
-			}, base64Reply)
+			response, err := DnsParser.BuildVPNResponsePayload(query, parsed.Questions[0].Name, accept, base64Reply)
 			if err != nil {
 				continue
 			}
@@ -359,7 +339,7 @@ func TestInitializeSessionRequestAfterResetReadsRequestedReplyMode(t *testing.T)
 	c, resolver := newSessionInitTestClient(t, cfg)
 
 	// A session reset sets the session's reply mode back to raw.
-	c.resetSessionState(true)
+	c.resetSessionState()
 
 	_, initPayload, verifyCode, err := c.nextSessionInitAttempt()
 	if err != nil {
@@ -368,7 +348,7 @@ func TestInitializeSessionRequestAfterResetReadsRequestedReplyMode(t *testing.T)
 	if initPayload[0] != mtuProbeBase64Reply {
 		t.Fatalf("expected session init to ask for base64 replies, got mode=%d", initPayload[0])
 	}
-	answerSessionInitQueries(resolver, verifyCode, true)
+	answerSessionInitQueries(t, c, resolver, verifyCode, true)
 
 	if err := c.initializeSessionRequest(); err != nil {
 		t.Fatalf("initializeSessionRequest returned error: %v", err)
@@ -395,7 +375,7 @@ func TestInitializeSessionRequestRacersDoNotRaceWithAppliedAnswer(t *testing.T) 
 			t.Fatalf("nextSessionInitAttempt returned error: %v", err)
 		}
 		sessions = append(sessions, c)
-		answered = append(answered, answerSessionInitQueries(resolver, verifyCode, false))
+		answered = append(answered, answerSessionInitQueries(t, c, resolver, verifyCode, false))
 	}
 
 	var wg sync.WaitGroup
@@ -434,7 +414,7 @@ func TestLateSessionInitRacerDoesNotRaceWithClientPolicySync(t *testing.T) {
 	if err != nil {
 		t.Fatalf("nextSessionInitAttempt returned error: %v", err)
 	}
-	answerSessionInitQueries(resolver, verifyCode, false)
+	answerSessionInitQueries(t, c, resolver, verifyCode, false)
 	query, err := c.buildSessionQuery(conn.Domain, Enums.PACKET_SESSION_INIT, initPayload)
 	if err != nil {
 		t.Fatalf("buildSessionQuery returned error: %v", err)
@@ -469,10 +449,16 @@ func TestLateSessionInitRacerDoesNotRaceWithClientPolicySync(t *testing.T) {
 		}
 	}()
 
-	err = c.applySessionInitPacket(VpnProto.Packet{
-		PacketType: Enums.PACKET_SESSION_ACCEPT,
-		Payload:    sessionAcceptTestPayload(verifyCode),
-	}, initPayload, verifyCode)
+	err = c.applySessionInitPacket(buildTestSessionAccept(t, c, VpnProto.SessionAcceptPayload{
+		SessionID:       7,
+		CompressionPair: compression.PackPair(compression.TypeOff, compression.TypeOff),
+		VerifyCode:      verifyCode,
+		ClientPolicy: VpnProto.SessionAcceptClientPolicy{
+			MaxUploadMTU:   120,
+			MaxDownloadMTU: 4000,
+		},
+		HasClientPolicySync: true,
+	}), verifyCode)
 	<-racerDone
 	if err != nil {
 		t.Fatalf("applySessionInitPacket returned error: %v", err)
@@ -489,10 +475,16 @@ func TestLateSessionInitRacerDoesNotRaceWithClientPolicySync(t *testing.T) {
 func TestResolverHealthRecheckDoesNotRaceWithSessionPolicySync(t *testing.T) {
 	cfg := sessionInitTestConfig()
 	cfg.RecheckInactiveServersEnabled = true
+	cfg.MaxActiveResolvers = 1
 	// An inactive resolver that answers every probe without a tunnel answer,
 	// so each recheck attempt fails.
 	resolver, inactive := listenTestResolver(t, "b")
 	c, _ := newSessionInitTestClient(t, cfg, inactive)
+	initialUploadMTU := c.maxUploadMTUPayload(inactive.Domain)
+	if initialUploadMTU < 2 {
+		t.Fatalf("expected a positive authenticated probe capacity, got %d", initialUploadMTU)
+	}
+	c.syncedUploadMTU = initialUploadMTU
 
 	probes := make(chan struct{}, 2)
 	applied := make(chan struct{})
@@ -543,20 +535,26 @@ func TestResolverHealthRecheckDoesNotRaceWithSessionPolicySync(t *testing.T) {
 	}()
 
 	waitForProbe("first")
-	_, initPayload, verifyCode, err := c.nextSessionInitAttempt()
+	_, _, verifyCode, err := c.nextSessionInitAttempt()
 	if err != nil {
 		t.Fatalf("nextSessionInitAttempt returned error: %v", err)
 	}
-	err = c.applySessionInitPacket(VpnProto.Packet{
-		PacketType: Enums.PACKET_SESSION_ACCEPT,
-		Payload:    sessionAcceptTestPayload(verifyCode),
-	}, initPayload, verifyCode)
+	err = c.applySessionInitPacket(buildTestSessionAccept(t, c, VpnProto.SessionAcceptPayload{
+		SessionID:       7,
+		CompressionPair: compression.PackPair(compression.TypeOff, compression.TypeOff),
+		VerifyCode:      verifyCode,
+		ClientPolicy: VpnProto.SessionAcceptClientPolicy{
+			MaxUploadMTU:   initialUploadMTU - 1,
+			MaxDownloadMTU: 4000,
+		},
+		HasClientPolicySync: true,
+	}), verifyCode)
 	close(applied)
 	if err != nil {
 		t.Fatalf("applySessionInitPacket returned error: %v", err)
 	}
 	waitForProbe("second")
-	if c.syncedUploadMTU != 120 {
-		t.Fatalf("expected the client policy to lower the synced upload mtu to 120, got=%d", c.syncedUploadMTU)
+	if c.syncedUploadMTU != initialUploadMTU-1 {
+		t.Fatalf("expected the client policy to lower the synced upload mtu to %d, got=%d", initialUploadMTU-1, c.syncedUploadMTU)
 	}
 }

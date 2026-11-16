@@ -15,8 +15,6 @@ import (
 	"time"
 
 	"masterdnsvpn-go/internal/config"
-	"masterdnsvpn-go/internal/security"
-	"masterdnsvpn-go/internal/udpserver"
 )
 
 func startMockMTUDNSListener(t *testing.T, domain string) (*net.UDPConn, int, *atomic.Int32) {
@@ -29,12 +27,7 @@ func startMockMTUDNSListener(t *testing.T, domain string) (*net.UDPConn, int, *a
 	serverCfg := config.DefaultServerConfig()
 	serverCfg.Domain = []string{domain}
 	serverCfg.MinVPNLabelLength = 3
-	serverCfg.DataEncryptionMethod = 0
-	serverCodec, err := security.NewCodec(0, "")
-	if err != nil {
-		t.Fatalf("server codec init failed: %v", err)
-	}
-	server := udpserver.New(serverCfg, nil, serverCodec)
+	server := clientTestUDPServer(serverCfg, nil)
 
 	var queryCount atomic.Int32
 	go func() {
@@ -61,10 +54,7 @@ func startMockMTUDNSListener(t *testing.T, domain string) (*net.UDPConn, int, *a
 func createTestFastStartClient(t *testing.T, cfg config.ClientConfig) *Client {
 	t.Helper()
 	cfg.AutoSaveRankedResolvers = false
-	codec, err := security.NewCodec(cfg.DataEncryptionMethod, cfg.EncryptionKey)
-	if err != nil {
-		t.Fatalf("client codec init failed: %v", err)
-	}
+	codec := clientTestCredential()
 	client := New(cfg, nil, codec)
 	if err := client.BuildConnectionMap(); err != nil {
 		t.Fatalf("BuildConnectionMap failed: %v", err)
@@ -222,12 +212,7 @@ func startMockMultiDomainMTUDNSListener(t *testing.T, domains []string) (*net.UD
 	serverCfg := config.DefaultServerConfig()
 	serverCfg.Domain = domains
 	serverCfg.MinVPNLabelLength = 3
-	serverCfg.DataEncryptionMethod = 0
-	serverCodec, err := security.NewCodec(0, "")
-	if err != nil {
-		t.Fatalf("server codec init failed: %v", err)
-	}
-	server := udpserver.New(serverCfg, nil, serverCodec)
+	server := clientTestUDPServer(serverCfg, nil)
 
 	var queryCount atomic.Int32
 	go func() {
@@ -393,12 +378,7 @@ func startMockSelectivelyDroppingMTUDNSListener(t *testing.T, domain string, max
 	serverCfg := config.DefaultServerConfig()
 	serverCfg.Domain = []string{domain}
 	serverCfg.MinVPNLabelLength = 3
-	serverCfg.DataEncryptionMethod = 0
-	serverCodec, err := security.NewCodec(0, "")
-	if err != nil {
-		t.Fatalf("server codec init failed: %v", err)
-	}
-	server := udpserver.New(serverCfg, nil, serverCodec)
+	server := clientTestUDPServer(serverCfg, nil)
 
 	var queryCount atomic.Int32
 	go func() {

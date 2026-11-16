@@ -153,7 +153,6 @@ func TestBuildAndExtractVPNResponsePacketCompressed(t *testing.T) {
 	response, err := BuildVPNResponsePacket(query, "x.v.example.com", VpnProto.Packet{
 		SessionID:       7,
 		PacketType:      Enums.PACKET_STREAM_DATA,
-		SessionCookie:   9,
 		StreamID:        1,
 		SequenceNum:     2,
 		FragmentID:      0,
@@ -382,4 +381,32 @@ func TestBuildTXTQuestionPacketUsesDistinctRequestIDs(t *testing.T) {
 	if firstID == secondID {
 		t.Fatalf("expected distinct request ids, got identical id %d", firstID)
 	}
+}
+
+// FuzzExtractVPNResponsePayload feeds arbitrary datagrams to the downlink
+// extractor, which runs on whatever a resolver (or an attacker in its place)
+// sends before any authentication is possible.
+func FuzzExtractVPNResponsePayload(f *testing.F) {
+	query, err := BuildTXTQuestionPacket("x.v.example.com", Enums.DNS_RECORD_TYPE_TXT, 4096)
+	if err != nil {
+		f.Fatal(err)
+	}
+	frame := bytes.Repeat([]byte{0xa5}, 700)
+	for _, base64Mode := range []bool{false, true} {
+		response, err := BuildVPNResponsePayload(query, "x.v.example.com", frame, base64Mode)
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(response, base64Mode)
+	}
+	f.Add([]byte{}, false)
+	f.Fuzz(func(t *testing.T, packet []byte, base64Mode bool) {
+		if len(packet) > 65535 {
+			return
+		}
+		payload, err := ExtractVPNResponsePayload(packet, base64Mode)
+		if err == nil && len(payload) > 256*256 {
+			t.Fatalf("extracted %d bytes from a %d byte datagram", len(payload), len(packet))
+		}
+	})
 }

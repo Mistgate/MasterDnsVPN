@@ -22,7 +22,7 @@ func TestInteractiveStatsDefaultDoesNotClaimStdin(t *testing.T) {
 	consoleListenerOnce = sync.Once{}
 	statsHintOnce = sync.Once{}
 	t.Cleanup(func() { os.Stdin = original; consoleListenerOnce = sync.Once{}; statsHintOnce = sync.Once{} })
-	c := New(config.DefaultClientConfig(), logger.New("test", "error"), nil)
+	c := New(config.DefaultClientConfig(), logger.New("test", "error"), clientTestCredential())
 	c.startInteractiveConsoleListener(context.Background())
 	c.printRuntimeStatsHint()
 	listenerUnused, hintUnused := false, false

@@ -2,7 +2,7 @@ package main
 
 import (
 	"encoding/base64"
-	"errors"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -19,12 +19,11 @@ func testSettings(t *testing.T) settings {
 		appDir:     filepath.Join(root, "app"),
 		dataDir:    filepath.Join(root, "data"),
 		configFile: "server_config.toml",
-		keyFile:    "encrypt_key.txt",
 		domain:     "vpn.example.com",
 		template:   filepath.Join(root, "sample.toml"),
 	}
 	writeTestFile(t, filepath.Join(s.appDir, "masterdnsvpn"), "fake server")
-	writeTestFile(t, s.template, "DOMAIN = [\"sample.example.com\"]\nDATA_ENCRYPTION_METHOD = 1\nUDP_PORT = 53\n")
+	writeTestFile(t, s.template, "DOMAIN = [\"sample.example.com\"]\nDEVICE_CREDENTIAL = \"0102030405060708.0000000000000000000000000000000000000000000000000000000000000000\"\nUDP_PORT = 53\n")
 	return s
 }
 
@@ -48,169 +47,130 @@ func readTestFile(t *testing.T, path string) string {
 }
 
 func argumentValue(args []string, flag string) string {
-	var value string
 	for i := 0; i+1 < len(args); i++ {
 		if args[i] == flag {
-			value = args[i+1]
+			return args[i+1]
 		}
 	}
-	return value
+	return ""
 }
 
-// Stand in for the server's idempotent -genkey operation without launching an
-// architecture-specific executable. The real server owns encryption policy.
-func fakeGenerate(c command) error {
-	keyLength := 32
-	if argumentValue(c.args, "-data-encryption-method") == "3" {
-		keyLength = 16
-	}
-	keyPath := argumentValue(c.args, "-encryption-key-file")
-	key, err := os.ReadFile(keyPath)
-	if err == nil && len(strings.TrimSpace(string(key))) == keyLength {
-		return nil
-	}
-	return os.WriteFile(keyPath, []byte(strings.Repeat("a", keyLength)), 0600)
-}
-
-func TestPrepareFirstBootCreatesValidConfigAndPersistsState(t *testing.T) {
+func TestPrepareFirstBootPersistsConfigAndLaunchesServer(t *testing.T) {
 	s := testSettings(t)
 	s.domain = `vpn$1&"quoted"\path.example.com`
-	launch, err := prepare(s, nil, fakeGenerate)
+	launch, err := prepare(s, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	config := readTestFile(t, filepath.Join(s.dataDir, s.configFile))
+	configPath := filepath.Join(s.appDir, s.configFile)
+	configData := readTestFile(t, configPath)
 	var decoded struct {
-		Domain  []string `toml:"DOMAIN"`
-		UDPPort int      `toml:"UDP_PORT"`
+		Domain           []string `toml:"DOMAIN"`
+		DeviceCredential string   `toml:"DEVICE_CREDENTIAL"`
+		UDPPort          int      `toml:"UDP_PORT"`
 	}
-	if _, err := toml.Decode(config, &decoded); err != nil {
+	if _, err := toml.Decode(configData, &decoded); err != nil {
 		t.Fatalf("generated config is invalid TOML: %v", err)
 	}
-	if !reflect.DeepEqual(decoded.Domain, []string{s.domain}) || decoded.UDPPort != 53 {
-		t.Fatalf("unexpected generated config: %#v", decoded)
+	if !reflect.DeepEqual(decoded.Domain, []string{s.domain}) || decoded.UDPPort != 53 || decoded.DeviceCredential == "" {
+		t.Fatalf("generated config fields are wrong: %+v", decoded)
 	}
-	if got := readTestFile(t, filepath.Join(s.appDir, s.configFile)); got != config {
-		t.Fatal("persisted config differs from active config")
-	}
-	key := readTestFile(t, filepath.Join(s.dataDir, s.keyFile))
-	if len(key) != 32 || key != readTestFile(t, filepath.Join(s.appDir, s.keyFile)) {
-		t.Fatal("generated key was not persisted intact")
+	if got := readTestFile(t, persistentPath(s, configPath)); got != configData {
+		t.Fatal("expected generated config to be persisted")
 	}
 	if launch.path != filepath.Join(s.appDir, "masterdnsvpn") || launch.dir != s.appDir {
-		t.Fatalf("unexpected server executable or working directory: %#v", launch)
+		t.Fatalf("unexpected launch target: %+v", launch)
 	}
-}
-
-func TestPrepareRestartRestoresPersistedConfigAndKeyWithoutDomain(t *testing.T) {
-	s := testSettings(t)
-	s.domain = ""
-	s.template = filepath.Join(t.TempDir(), "unavailable-template")
-	config := "DOMAIN = [\"persisted.example.com\"]\nUDP_PORT = 15353\n"
-	key := strings.Repeat("b", 32)
-	writeTestFile(t, filepath.Join(s.dataDir, s.configFile), config)
-	writeTestFile(t, filepath.Join(s.dataDir, s.keyFile), key)
-	writeTestFile(t, filepath.Join(s.appDir, s.configFile), "stale config")
-	writeTestFile(t, filepath.Join(s.appDir, s.keyFile), "stale key")
-	if _, err := prepare(s, nil, fakeGenerate); err != nil {
-		t.Fatal(err)
+	if argumentValue(launch.args, "-config") != configPath {
+		t.Fatalf("launch did not use generated config path: %v", launch.args)
 	}
-	for _, dir := range []string{s.appDir, s.dataDir} {
-		if readTestFile(t, filepath.Join(dir, s.configFile)) != config || readTestFile(t, filepath.Join(dir, s.keyFile)) != key {
-			t.Fatalf("persistent state was changed or not restored in %s", dir)
+	for _, arg := range launch.args {
+		if arg == "-genkey" || arg == "-encryption-key-file" {
+			t.Fatalf("legacy key setup argument remains: %v", launch.args)
 		}
 	}
 }
 
-func TestPrepareRepairsAndPersistsMalformedKey(t *testing.T) {
+func TestPrepareRestartRestoresPersistedConfigWithoutKeyFiles(t *testing.T) {
 	s := testSettings(t)
-	writeTestFile(t, filepath.Join(s.dataDir, s.keyFile), "bad key")
-	if _, err := prepare(s, nil, fakeGenerate); err != nil {
-		t.Fatal(err)
-	}
-	key := readTestFile(t, filepath.Join(s.dataDir, s.keyFile))
-	if len(key) != 32 || key != readTestFile(t, filepath.Join(s.appDir, s.keyFile)) {
-		t.Fatal("repaired key was not persisted")
-	}
-}
-
-func TestPrepareCustomPathsAndFlagsReachGenerationAndRuntime(t *testing.T) {
-	s := testSettings(t)
-	s.appDir = filepath.Join(t.TempDir(), "custom app", "nested")
-	s.dataDir = filepath.Join(t.TempDir(), "custom data", "nested")
-	s.configFile = "custom config.toml"
-	s.keyFile = "custom key.txt"
-	s.keyFileExplicit = true
-	writeTestFile(t, filepath.Join(s.appDir, "masterdnsvpn"), "fake server")
-	args := []string{"-udp-port", "15353", "-data-encryption-method", "3"}
-	var generated command
-	launch, err := prepare(s, args, func(c command) error {
-		generated = c
-		return fakeGenerate(c)
-	})
+	first, err := prepare(s, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range []command{generated, launch} {
-		for flag, want := range map[string]string{
-			"-config":                 filepath.Join(s.appDir, s.configFile),
-			"-encryption-key-file":    filepath.Join(s.appDir, s.keyFile),
-			"-udp-port":               "15353",
-			"-data-encryption-method": "3",
-		} {
-			if got := argumentValue(c.args, flag); got != want {
-				t.Errorf("%s: got %q, want %q", flag, got, want)
-			}
-		}
+	configPath := argumentValue(first.args, "-config")
+	want := readTestFile(t, configPath)
+	if err := os.Remove(configPath); err != nil {
+		t.Fatal(err)
 	}
-	if generated.args[len(generated.args)-1] != "-genkey" {
-		t.Fatal("generation command does not request key generation")
+	s.domain = ""
+	second, err := prepare(s, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, arg := range launch.args {
-		if arg == "-genkey" {
-			t.Fatal("generation-only flag leaked into runtime command")
-		}
-	}
-	if len(readTestFile(t, filepath.Join(s.dataDir, s.keyFile))) != 16 {
-		t.Fatal("custom encryption-mode key was not persisted")
-	}
-	if _, err := os.Stat(filepath.Join(s.dataDir, s.configFile)); err != nil {
-		t.Fatalf("custom config was not persisted: %v", err)
+	if got := readTestFile(t, argumentValue(second.args, "-config")); got != want {
+		t.Fatal("restart did not restore the persisted server config")
 	}
 }
 
-func TestPrepareKeyPathPrecedencePreservesExistingKeys(t *testing.T) {
-	for _, source := range []string{"config", "environment", "command line"} {
-		t.Run(source, func(t *testing.T) {
-			s := testSettings(t)
-			s.domain = ""
-			s.configFile = filepath.Join("settings", "server.toml")
-			writeTestFile(t, filepath.Join(s.dataDir, s.configFile), "DOMAIN = [\"saved.example.com\"]\nENCRYPTION_KEY_FILE = \"keys/config.key\"\n")
-			relativeKey := filepath.Join("settings", "keys", "config.key")
-			var args []string
-			if source != "config" {
-				s.keyFile = filepath.Join("environment", "custom.key")
-				s.keyFileExplicit = true
-				relativeKey = s.keyFile
-			}
-			if source == "command line" {
-				args = []string{"--encryption-key-file=keys/command.key"}
-				relativeKey = filepath.Join("settings", "keys", "command.key")
-			}
-			key := strings.Repeat("c", 32)
-			writeTestFile(t, filepath.Join(s.dataDir, relativeKey), key)
-			launch, err := prepare(s, args, fakeGenerate)
-			if err != nil {
-				t.Fatal(err)
-			}
-			activeKey := filepath.Join(s.appDir, relativeKey)
-			if got := argumentValue(launch.args, "-encryption-key-file"); got != activeKey {
-				t.Fatalf("runtime key path: got %q, want %q", got, activeKey)
-			}
-			if readTestFile(t, activeKey) != key || readTestFile(t, filepath.Join(s.dataDir, relativeKey)) != key {
-				t.Fatal("existing custom encryption key was changed")
-			}
-		})
+func TestPrepareConfigOverrideAndRemainingFlags(t *testing.T) {
+	s := testSettings(t)
+	custom := filepath.Join("custom", "server.toml")
+	launch, err := prepare(s, []string{"-config", custom, "-udp-port", "15353", "--", "-domain", "ignored"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(s.appDir, custom)
+	if argumentValue(launch.args, "-config") != configPath {
+		t.Fatalf("config override was not canonicalized: %v", launch.args)
+	}
+	if !reflect.DeepEqual(launch.args[len(launch.args)-4:], []string{"-udp-port", "15353", "--", "-domain"}) {
+		// The final positional value is also preserved after --.
+		if !reflect.DeepEqual(launch.args[len(launch.args)-5:], []string{"-udp-port", "15353", "--", "-domain", "ignored"}) {
+			t.Fatalf("remaining server flags changed order: %v", launch.args)
+		}
+	}
+}
+
+func TestPrepareBase64ConfigPersistsAndRestores(t *testing.T) {
+	s := testSettings(t)
+	document := map[string]any{
+		"DOMAIN":            []string{"incoming.example.com"},
+		"DEVICE_CREDENTIAL": "0102030405060708.0000000000000000000000000000000000000000000000000000000000000000",
+	}
+	raw, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := base64.StdEncoding.EncodeToString(raw)
+	launch, err := prepare(s, []string{"-json_base64", encoded})
+	if err != nil {
+		t.Fatal(err)
+	}
+	configPath := argumentValue(launch.args, "-config")
+	if filepath.Ext(configPath) != ".json" {
+		t.Fatalf("expected JSON fallback path, got %s", configPath)
+	}
+	if err := os.Remove(configPath); err != nil {
+		t.Fatal(err)
+	}
+	s.domain = ""
+	restarted, err := prepare(s, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := argumentValue(restarted.args, "-config"); filepath.Ext(got) != ".json" {
+		t.Fatalf("restart did not restore the persisted JSON config: %s", got)
+	}
+}
+
+func TestPrepareRejectsConflictingJSONSourcesBeforeWriting(t *testing.T) {
+	s := testSettings(t)
+	_, err := prepare(s, []string{"-j", "config.json", "-json-base64", "e30="})
+	if err == nil {
+		t.Fatal("expected conflicting JSON sources to be rejected")
+	}
+	if _, err := os.Stat(s.dataDir); !os.IsNotExist(err) {
+		t.Fatalf("expected no state directory to be created before validation, got %v", err)
 	}
 }
 
@@ -218,30 +178,23 @@ func TestPrepareConfigFlagSelectsFilesForRestoreAndPersistence(t *testing.T) {
 	s := testSettings(t)
 	s.domain = ""
 	configName := filepath.Join("selected", "server.toml")
-	config := "DOMAIN = [\"selected.example.com\"]\nENCRYPTION_KEY_FILE = \"selected.key\"\n"
-	writeTestFile(t, filepath.Join(s.dataDir, configName), config)
-	args := []string{"-config", "superseded.toml", "--config=selected/server.toml", "-udp-port", "15353"}
-	var generated command
-	launch, err := prepare(s, args, func(c command) error {
-		generated = c
-		return fakeGenerate(c)
-	})
+	config := "DOMAIN = [\"selected.example.com\"]\nDEVICE_CREDENTIAL = \"0102030405060708.0000000000000000000000000000000000000000000000000000000000000000\"\n"
+	persistedPath := filepath.Join(s.dataDir, configName)
+	writeTestFile(t, persistedPath, config)
+
+	launch, err := prepare(s, []string{"-config", "superseded.toml", "--config=selected/server.toml", "-udp-port", "15353"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range []command{generated, launch} {
-		if got := argumentValue(c.args, "-config"); got != filepath.Join(s.appDir, configName) {
-			t.Fatalf("incorrect effective config path: %q", got)
-		}
-		if got := argumentValue(c.args, "-encryption-key-file"); got != filepath.Join(s.appDir, "selected", "selected.key") {
-			t.Fatalf("incorrect key path for selected config: %q", got)
-		}
+	selectedPath := filepath.Join(s.appDir, configName)
+	if argumentValue(launch.args, "-config") != selectedPath {
+		t.Fatalf("incorrect effective config path: %q", argumentValue(launch.args, "-config"))
 	}
-	if readTestFile(t, filepath.Join(s.dataDir, configName)) != config {
-		t.Fatal("selected persisted config was modified")
+	if got := readTestFile(t, selectedPath); got != config {
+		t.Fatalf("selected persisted config changed: %q", got)
 	}
-	if len(readTestFile(t, filepath.Join(s.dataDir, "selected", "selected.key"))) != 32 {
-		t.Fatal("selected config's key was not persisted")
+	if got := readTestFile(t, persistedPath); got != config {
+		t.Fatalf("selected config persistence changed: %q", got)
 	}
 	if _, err := os.Stat(filepath.Join(s.appDir, s.configFile)); !os.IsNotExist(err) {
 		t.Fatalf("default config unexpectedly created: %v", err)
@@ -252,63 +205,23 @@ func TestPrepareConfigInsideDataDirectoryPersistsInPlace(t *testing.T) {
 	s := testSettings(t)
 	s.domain = ""
 	configPath := filepath.Join(s.dataDir, "mounted", "server.toml")
-	keyPath := filepath.Join(s.dataDir, "mounted", "server.key")
-	writeTestFile(t, configPath, "DOMAIN = [\"mounted.example.com\"]\nENCRYPTION_KEY_FILE = \"server.key\"\n")
-	key := strings.Repeat("d", 32)
-	writeTestFile(t, keyPath, key)
-	launch, err := prepare(s, []string{"-config", configPath}, fakeGenerate)
+	config := "DOMAIN = [\"mounted.example.com\"]\nDEVICE_CREDENTIAL = \"0102030405060708.0000000000000000000000000000000000000000000000000000000000000000\"\n"
+	writeTestFile(t, configPath, config)
+
+	launch, err := prepare(s, []string{"-config", configPath})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if argumentValue(launch.args, "-config") != configPath || argumentValue(launch.args, "-encryption-key-file") != keyPath {
-		t.Fatalf("mounted paths were not retained: %#v", launch.args)
+	if argumentValue(launch.args, "-config") != configPath {
+		t.Fatalf("mounted config path was not retained: %#v", launch.args)
 	}
-	if readTestFile(t, keyPath) != key {
-		t.Fatal("mounted encryption key was modified")
-	}
-}
-
-func TestEnvironmentSettingsDistinguishesExplicitKeyFile(t *testing.T) {
-	t.Setenv("KEY_FILE", "")
-	if s := environmentSettings(); s.keyFileExplicit || s.keyFile != "encrypt_key.txt" {
-		t.Fatalf("empty KEY_FILE should use implicit fallback: %#v", s)
-	}
-	t.Setenv("KEY_FILE", "encrypt_key.txt")
-	if s := environmentSettings(); !s.keyFileExplicit {
-		t.Fatal("an explicitly provided default key name must still take precedence")
+	if got := readTestFile(t, configPath); got != config {
+		t.Fatalf("mounted config changed: %q", got)
 	}
 }
 
-func TestPrepareGenerationFlagPrecedesArgumentTerminator(t *testing.T) {
-	s := testSettings(t)
-	launch, err := prepare(s, []string{"-udp-port", "15353", "-genkey=false", "--"}, func(c command) error {
-		generating := false
-		for _, arg := range c.args {
-			if arg == "-genkey" {
-				generating = true
-			}
-			if arg == "-genkey=false" {
-				generating = false
-			}
-			if arg == "--" {
-				break
-			}
-		}
-		if !generating {
-			t.Fatal("key generation would start the long-running server")
-		}
-		return fakeGenerate(c)
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if launch.args[len(launch.args)-1] != "--" {
-		t.Fatal("runtime argument terminator was changed")
-	}
-}
-
-func TestPrepareJSONFileAliasesSelectConfigAndKey(t *testing.T) {
-	for _, tt := range []struct {
+func TestPrepareJSONFileAliasesSelectConfig(t *testing.T) {
+	for _, tc := range []struct {
 		name string
 		args []string
 		file string
@@ -317,31 +230,29 @@ func TestPrepareJSONFileAliasesSelectConfigAndKey(t *testing.T) {
 		{"alias", []string{"--j=json/alias.json"}, "alias"},
 		{"empty primary uses alias", []string{"-j", "json/alias.json", "--json="}, "alias"},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			s := testSettings(t)
 			s.domain = ""
-			for _, file := range []string{"primary", "alias"} {
-				config := `{"DOMAIN":["saved.example.com"],"ENCRYPTION_KEY_FILE":"keys/` + file + `.key"}`
-				writeTestFile(t, filepath.Join(s.dataDir, "json", file+".json"), config)
+			for _, name := range []string{"primary", "alias"} {
+				writeTestFile(t, filepath.Join(s.dataDir, "json", name+".json"), `{"DOMAIN":["saved.example.com"]}`)
 			}
-			launch, err := prepare(s, append([]string{"-config", "unused.toml"}, tt.args...), fakeGenerate)
+			launch, err := prepare(s, append([]string{"-config", "unused.toml"}, tc.args...))
 			if err != nil {
 				t.Fatal(err)
 			}
-			wantConfig := filepath.Join(s.appDir, "json", tt.file+".json")
-			wantKey := filepath.Join(s.appDir, "json", "keys", tt.file+".key")
-			if argumentValue(launch.args, "-config") != wantConfig || argumentValue(launch.args, "-encryption-key-file") != wantKey {
-				t.Fatalf("JSON source and key were not selected together: %#v", launch.args)
+			want := filepath.Join(s.appDir, "json", tc.file+".json")
+			if got := argumentValue(launch.args, "-config"); got != want {
+				t.Fatalf("JSON source was not selected: got=%q want=%q", got, want)
 			}
-			if len(readTestFile(t, filepath.Join(s.dataDir, "json", "keys", tt.file+".key"))) != 32 {
-				t.Fatal("JSON config's encryption key was not persisted")
+			if got := readTestFile(t, want); got != `{"DOMAIN":["saved.example.com"]}` {
+				t.Fatalf("selected JSON config changed: %s", got)
 			}
 		})
 	}
 }
 
 func TestPrepareBase64ConfigOverridesPersistedJSONAndSurvivesRestart(t *testing.T) {
-	document := `{"DOMAIN":["incoming.example.com"],"ENCRYPTION_KEY_FILE":"keys/encoded.key"}`
+	document := `{"DEVICE_CREDENTIAL":"0102030405060708.0000000000000000000000000000000000000000000000000000000000000000","DOMAIN":["incoming.example.com"]}`
 	encoded := base64.StdEncoding.EncodeToString([]byte(document))
 	for _, args := range [][]string{
 		{"-json_base64", encoded, "-json-base64", "ignored-invalid-alias"},
@@ -350,61 +261,33 @@ func TestPrepareBase64ConfigOverridesPersistedJSONAndSurvivesRestart(t *testing.
 		t.Run(args[0], func(t *testing.T) {
 			s := testSettings(t)
 			s.domain = ""
-			writeTestFile(t, filepath.Join(s.dataDir, "server_config.json"), `{"DOMAIN":["stale.example.com"],"ENCRYPTION_KEY_FILE":"stale.key"}`)
-			launch, err := prepare(s, args, fakeGenerate)
+			writeTestFile(t, filepath.Join(s.dataDir, "server_config.json"), `{"DOMAIN":["stale.example.com"]}`)
+			launch, err := prepare(s, args)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if argumentValue(launch.args, "-config") != filepath.Join(s.appDir, "server_config.json") {
+			configPath := filepath.Join(s.appDir, "server_config.json")
+			if argumentValue(launch.args, "-config") != configPath {
 				t.Fatalf("base64 config was not canonicalized: %#v", launch.args)
 			}
-			if readTestFile(t, filepath.Join(s.dataDir, "server_config.json")) != document {
-				t.Fatal("incoming base64 config did not replace persisted JSON")
+			if got := readTestFile(t, configPath); got != document {
+				t.Fatalf("incoming base64 config did not replace stale config: %s", got)
 			}
-			keyPath := filepath.Join(s.dataDir, "keys", "encoded.key")
-			key := readTestFile(t, keyPath)
-			if len(key) != 32 {
-				t.Fatal("base64 config key was not persisted")
+			if got := readTestFile(t, filepath.Join(s.dataDir, "server_config.json")); got != document {
+				t.Fatalf("incoming base64 config was not persisted: %s", got)
 			}
-			// Simulate a replacement container with only the data volume left.
+
 			s.appDir = filepath.Join(t.TempDir(), "replacement-app")
-			s.template = filepath.Join(t.TempDir(), "unavailable-template")
 			writeTestFile(t, filepath.Join(s.appDir, "masterdnsvpn"), "fake server")
-			restarted, err := prepare(s, nil, fakeGenerate)
+			restarted, err := prepare(s, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if argumentValue(restarted.args, "-config") != filepath.Join(s.appDir, "server_config.json") || readTestFile(t, keyPath) != key {
-				t.Fatal("restart failed to restore JSON config and original key")
+			restoredPath := argumentValue(restarted.args, "-config")
+			if restoredPath != filepath.Join(s.appDir, "server_config.json") || readTestFile(t, restoredPath) != document {
+				t.Fatal("restart did not restore the incoming JSON config")
 			}
 		})
-	}
-}
-
-func TestPrepareConflictingJSONSourcesFailBeforeStateWrites(t *testing.T) {
-	s := testSettings(t)
-	_, err := prepare(s, []string{"-j", "config.json", "-json-base64", "e30="}, func(command) error {
-		t.Fatal("server invoked despite conflicting configuration sources")
-		return nil
-	})
-	if err == nil || !strings.Contains(err.Error(), "only one of -json and -json_base64") {
-		t.Fatalf("conflicting sources were accepted: %v", err)
-	}
-	if _, err := os.Stat(s.dataDir); !os.IsNotExist(err) {
-		t.Fatalf("data directory modified before source validation: %v", err)
-	}
-}
-
-func TestPrepareJSONKeyLookupMatchesServerCaseSensitivity(t *testing.T) {
-	s := testSettings(t)
-	s.domain = ""
-	writeTestFile(t, filepath.Join(s.dataDir, "server_config.json"), `{"DOMAIN":["saved.example.com"],"encryption_key_file":"ignored.key"}`)
-	launch, err := prepare(s, nil, fakeGenerate)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := argumentValue(launch.args, "-encryption-key-file"); got != filepath.Join(s.appDir, "encrypt_key.txt") {
-		t.Fatalf("launcher honored a JSON key the server ignores: %q", got)
 	}
 }
 
@@ -414,55 +297,23 @@ func TestPrepareReportsStartupFailures(t *testing.T) {
 		change func(*testing.T, *settings)
 		want   string
 	}{
-		{"missing domain", func(t *testing.T, s *settings) { s.domain = "" }, "DOMAIN env is required"},
+		{"missing domain", func(_ *testing.T, s *settings) { s.domain = "" }, "DOMAIN env is required"},
 		{"missing binary", func(t *testing.T, s *settings) {
 			if err := os.Remove(filepath.Join(s.appDir, "masterdnsvpn")); err != nil {
 				t.Fatal(err)
 			}
 		}, "server binary is missing"},
-		{"missing template", func(t *testing.T, s *settings) {
-			s.template = filepath.Join(t.TempDir(), "missing.toml")
-		}, "read bundled configuration"},
-		{"invalid template", func(t *testing.T, s *settings) {
-			writeTestFile(t, s.template, "UDP_PORT = 53\n")
-		}, "bundled configuration has no DOMAIN"},
+		{"missing template", func(t *testing.T, s *settings) { s.template = filepath.Join(t.TempDir(), "missing.toml") }, "read bundled configuration"},
+		{"invalid template", func(t *testing.T, s *settings) { writeTestFile(t, s.template, "UDP_PORT = 53\n") }, "bundled configuration has no DOMAIN"},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			s := testSettings(t)
-			tt.change(t, &s)
-			called := false
-			_, err := prepare(s, nil, func(command) error { called = true; return nil })
-			if err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("got error %v, want %q", err, tt.want)
-			}
-			if called {
-				t.Fatal("server was invoked despite invalid startup inputs")
+			tc.change(t, &s)
+			_, err := prepare(s, nil)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got error %v, want substring %q", err, tc.want)
 			}
 		})
 	}
-
-	t.Run("key generation", func(t *testing.T) {
-		s := testSettings(t)
-		failure := errors.New("server rejected config")
-		_, err := prepare(s, nil, func(command) error { return failure })
-		if !errors.Is(err, failure) {
-			t.Fatalf("generation failure was lost: %v", err)
-		}
-	})
-
-	t.Run("persistence", func(t *testing.T) {
-		s := testSettings(t)
-		_, err := prepare(s, nil, func(c command) error {
-			if err := fakeGenerate(c); err != nil {
-				return err
-			}
-			// Introduce a destination failure after restore, independent of OS
-			// permissions (which behave differently on Windows and as root).
-			return os.Mkdir(filepath.Join(s.dataDir, s.keyFile), 0755)
-		})
-		if err == nil || !strings.Contains(err.Error(), "persist "+s.keyFile) {
-			t.Fatalf("persistence failure was ignored: %v", err)
-		}
-	})
 }

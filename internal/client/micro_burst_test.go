@@ -17,8 +17,6 @@ import (
 	"time"
 
 	"masterdnsvpn-go/internal/config"
-	"masterdnsvpn-go/internal/security"
-	"masterdnsvpn-go/internal/udpserver"
 )
 
 func TestCalculateBurstScore(t *testing.T) {
@@ -104,12 +102,7 @@ func startMockBurstServer(t *testing.T, domain string, dropAfter int, delayPerPa
 	serverCfg := config.DefaultServerConfig()
 	serverCfg.Domain = []string{domain}
 	serverCfg.MinVPNLabelLength = 3
-	serverCfg.DataEncryptionMethod = 0
-	serverCodec, err := security.NewCodec(0, "")
-	if err != nil {
-		t.Fatalf("server codec init failed: %v", err)
-	}
-	server := udpserver.New(serverCfg, nil, serverCodec)
+	server := clientTestUDPServer(serverCfg, nil)
 
 	var queryCount atomic.Int32
 	go func() {
@@ -144,18 +137,14 @@ func startMockBurstServer(t *testing.T, domain string, dropAfter int, delayPerPa
 }
 
 func TestSendPipelinedMicroBurstSuccess(t *testing.T) {
-	mockConn, addr := startMockBurstServer(t, "example.com", 0, 0)
+	mockConn, addr := startMockBurstServer(t, "example.com", 0, time.Millisecond)
 	defer mockConn.Close()
 
 	cfg := config.DefaultClientConfig()
 	cfg.Domains = []string{"example.com"}
-	cfg.DataEncryptionMethod = 0
 	cfg.MaxBurstLossRatio = 0.20
 	cfg.AutoSaveRankedResolvers = false
-	codec, err := security.NewCodec(0, "")
-	if err != nil {
-		t.Fatalf("security.NewCodec failed: %v", err)
-	}
+	codec := clientTestCredential()
 	c := New(cfg, nil, codec)
 
 	conn := Connection{
@@ -207,15 +196,11 @@ func TestSendPipelinedMicroBurstRejectsPartialTrain(t *testing.T) {
 			defer mockConn.Close()
 			cfg := config.DefaultClientConfig()
 			cfg.Domains = []string{"example.com"}
-			cfg.DataEncryptionMethod = 0
 			cfg.AutoSaveRankedResolvers = false
 			// Isolate completeness from the loss threshold: any received sample
 			// would qualify without the full-train guard.
 			cfg.MaxBurstLossRatio = 1
-			codec, err := security.NewCodec(0, "")
-			if err != nil {
-				t.Fatal(err)
-			}
+			codec := clientTestCredential()
 			c := New(cfg, nil, codec)
 			defer c.Close()
 			conn := Connection{Domain: "example.com", ResolverLabel: addr, Key: addr + "#example.com"}
@@ -250,13 +235,9 @@ func TestSendPipelinedMicroBurstDetectsRateLimiting(t *testing.T) {
 
 	cfg := config.DefaultClientConfig()
 	cfg.Domains = []string{"example.com"}
-	cfg.DataEncryptionMethod = 0
 	cfg.MaxBurstLossRatio = 0.20
 	cfg.AutoSaveRankedResolvers = false
-	codec, err := security.NewCodec(0, "")
-	if err != nil {
-		t.Fatalf("security.NewCodec failed: %v", err)
-	}
+	codec := clientTestCredential()
 	c := New(cfg, nil, codec)
 
 	conn := Connection{
@@ -306,7 +287,7 @@ func TestDiscoveryEngine_UDPQualificationRankingAndSelection(t *testing.T) {
 			MaxActiveResolvers:    c.cfg.MaxActiveResolvers,
 		}, NewUDPResolverProber(c), c.pool, nil)
 	}
-	server1, addr1 := startMockBurstServer(t, "example.com", 0, 0) // fast
+	server1, addr1 := startMockBurstServer(t, "example.com", 0, time.Millisecond) // fast, above clock granularity
 	defer server1.Close()
 	server2, addr2 := startMockBurstServer(t, "example.com", 0, 10*time.Millisecond) // slower
 	defer server2.Close()
@@ -315,17 +296,13 @@ func TestDiscoveryEngine_UDPQualificationRankingAndSelection(t *testing.T) {
 
 	cfg := config.DefaultClientConfig()
 	cfg.Domains = []string{"example.com"}
-	cfg.DataEncryptionMethod = 0
 	cfg.MaxActiveResolvers = 2
 	cfg.MicroBurstPacketCount = 4
 	cfg.MicroBurstParallelism = 4
 	cfg.AutoSaveRankedResolvers = false
 	cfg.MaxBurstLossRatio = 0.20
 
-	codec, err := security.NewCodec(0, "")
-	if err != nil {
-		t.Fatalf("security.NewCodec failed: %v", err)
-	}
+	codec := clientTestCredential()
 	c := New(cfg, nil, codec)
 	c.syncedDownloadMTU = 400
 	c.syncedUploadMTU = 100
@@ -450,8 +427,7 @@ func TestSendPipelinedMicroBurstDeterministicTimestampPairing(t *testing.T) {
 	addr := serverConn.LocalAddr().String()
 	serverCfg := config.DefaultServerConfig()
 	serverCfg.Domain = []string{"example.com"}
-	serverCodec, _ := security.NewCodec(0, "")
-	server := udpserver.New(serverCfg, nil, serverCodec)
+	server := clientTestUDPServer(serverCfg, nil)
 
 	go func() {
 		buf := make([]byte, 4096)
@@ -464,6 +440,8 @@ func TestSendPipelinedMicroBurstDeterministicTimestampPairing(t *testing.T) {
 			copy(query, buf[:n])
 			response := server.HandlePacket(query)
 			if len(response) > 0 {
+				// Keep loopback RTT above the platform clock's timestamp granularity.
+				time.Sleep(time.Millisecond)
 				_, _ = serverConn.WriteToUDP(response, remoteAddr)
 			}
 		}
@@ -472,7 +450,7 @@ func TestSendPipelinedMicroBurstDeterministicTimestampPairing(t *testing.T) {
 	cfg := config.DefaultClientConfig()
 	cfg.Domains = []string{"example.com"}
 	cfg.AutoSaveRankedResolvers = false
-	codec, _ := security.NewCodec(0, "")
+	codec := clientTestCredential()
 	c := New(cfg, nil, codec)
 
 	conn := Connection{
@@ -522,11 +500,10 @@ func TestStartupQualificationRejectsMalformedBurst(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer serverConn.Close()
-			codec, _ := security.NewCodec(0, "")
+			codec := clientTestCredential()
 			serverCfg := config.DefaultServerConfig()
 			serverCfg.Domain = []string{"example.com"}
-			serverCfg.DataEncryptionMethod = 0
-			server := udpserver.New(serverCfg, nil, codec)
+			server := clientTestUDPServer(serverCfg, nil)
 			go func() {
 				buf := make([]byte, 4096)
 				for {
@@ -551,7 +528,6 @@ func TestStartupQualificationRejectsMalformedBurst(t *testing.T) {
 				}
 			}()
 			cfg := config.DefaultClientConfig()
-			cfg.DataEncryptionMethod = 0
 			cfg.AutoSaveRankedResolvers = false
 			c := New(cfg, nil, codec)
 			transport, err := c.newUDPQueryTransport(context.Background(), serverConn.LocalAddr().String())

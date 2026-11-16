@@ -15,8 +15,10 @@ import (
 	"time"
 
 	"masterdnsvpn-go/internal/arq"
+	baseCodec "masterdnsvpn-go/internal/basecodec"
 	"masterdnsvpn-go/internal/config"
 	DnsParser "masterdnsvpn-go/internal/dnsparser"
+	domainMatcher "masterdnsvpn-go/internal/domainmatcher"
 	Enums "masterdnsvpn-go/internal/enums"
 	"masterdnsvpn-go/internal/logger"
 	"masterdnsvpn-go/internal/mlq"
@@ -34,16 +36,114 @@ func createTestClient(t *testing.T) *Client {
 		RXChannelSize:        10,
 		RX_TX_Workers:        1,
 		TunnelProcessWorkers: 1,
-		DataEncryptionMethod: 1,
-		EncryptionKey:        "testkey",
 	}
 	log := logger.New("TestLogger", "debug")
-	codec, err := security.NewCodec(1, "testkey")
-	if err != nil {
-		t.Fatalf("failed to create codec: %v", err)
-	}
+	codec := clientTestCredential()
 
 	return New(cfg, log, codec)
+}
+
+type duplicateTestEnqueuer struct{}
+
+func (duplicateTestEnqueuer) PushTXPacket(int, uint8, uint16, uint8, uint8, uint8, time.Duration, []byte) bool {
+	return true
+}
+
+func TestDuplicatedOutboundPacketsUseFreshCountersAndARQDeliversOnce(t *testing.T) {
+	c := New(config.DefaultClientConfig(), logger.New("duplication-test", "error"), clientTestCredential())
+	var clientToServer, serverToClient [security.CredentialKeySize]byte
+	for i := range clientToServer {
+		clientToServer[i] = byte(i + 1)
+		serverToClient[i] = byte(i + 65)
+	}
+	clientCipher, err := security.NewSessionCipher(7, clientToServer, serverToClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.sessionCipher = clientCipher
+
+	conns := []Connection{
+		{Key: "a", Domain: "a.example.com", Resolver: "127.0.0.1", ResolverPort: 5301, ResolverLabel: "127.0.0.1:5301"},
+		{Key: "b", Domain: "b.example.com", Resolver: "127.0.0.1", ResolverPort: 5302, ResolverLabel: "127.0.0.1:5302"},
+	}
+	data := []byte("one logical packet")
+	task := plannerTask{opts: VpnProto.BuildOptions{
+		PacketType:  Enums.PACKET_STREAM_DATA,
+		StreamID:    1,
+		SequenceNum: 0,
+		Payload:     data,
+	}}
+	frames, err := c.buildPlannedOutboundFrames(task, conns, "example.com", nil, make(map[string]preparedTunnelDomain), nil)
+	if err != nil {
+		t.Fatalf("buildPlannedOutboundFrames failed: %v", err)
+	}
+	if len(frames) != 2 {
+		t.Fatalf("expected two resolver copies, got %d", len(frames))
+	}
+	serverCipher, err := security.NewSessionCipher(7, serverToClient, clientToServer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seenCounters := make(map[uint32]bool, len(frames))
+	var decoded []VpnProto.Packet
+	matcher := domainMatcher.New([]string{"a.example.com", "b.example.com"}, 3)
+	for _, frame := range frames {
+		request, err := DnsParser.ParseDNSRequestLite(frame.packet)
+		if err != nil {
+			t.Fatalf("ParseDNSRequestLite failed: %v", err)
+		}
+		decision := matcher.Match(request)
+		if decision.Action != domainMatcher.ActionProcess {
+			t.Fatalf("test query did not match local tunnel domain: %+v", decision)
+		}
+		wire, err := baseCodec.DecodeString(decision.Labels)
+		if err != nil {
+			t.Fatalf("DecodeString failed: %v", err)
+		}
+		plain, counter, err := serverCipher.Open(wire)
+		if err != nil {
+			t.Fatalf("open duplicated frame failed: %v", err)
+		}
+		if seenCounters[counter] {
+			t.Fatalf("duplicate copy reused counter %d", counter)
+		}
+		seenCounters[counter] = true
+		packet, err := VpnProto.Parse(plain)
+		if err != nil {
+			t.Fatalf("Parse inner packet failed: %v", err)
+		}
+		decoded = append(decoded, packet)
+	}
+	if len(seenCounters) != 2 || decoded[0].SequenceNum != decoded[1].SequenceNum || string(decoded[0].Payload) != string(decoded[1].Payload) {
+		t.Fatalf("copies were not the same logical packet with fresh counters: counters=%v packets=%+v", seenCounters, decoded)
+	}
+
+	localApp, arqConn := net.Pipe()
+	defer localApp.Close()
+	arqStream := arq.NewARQ(1, 7, duplicateTestEnqueuer{}, arqConn, 4096, logger.New("duplication-arq", "error"), arq.Config{
+		WindowSize: 64,
+		RTO:        0.1,
+		MaxRTO:     0.5,
+	})
+	arqStream.Start()
+	defer arqStream.Close("test complete", arq.CloseOptions{Force: true})
+	for _, packet := range decoded {
+		if !arqStream.ReceiveData(packet.SequenceNum, packet.Payload) {
+			t.Fatal("ARQ rejected an authenticated copy")
+		}
+	}
+	buf := make([]byte, len(data))
+	if err := localApp.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	n, err := localApp.Read(buf)
+	if err != nil || string(buf[:n]) != string(data) {
+		t.Fatalf("logical packet was not delivered once: data=%q err=%v", buf[:n], err)
+	}
+	_ = localApp.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	if n, err := localApp.Read(buf); err == nil {
+		t.Fatalf("duplicate logical packet was delivered twice: extra=%q", buf[:n])
+	}
 }
 
 func TestResetRuntimeBindings(t *testing.T) {

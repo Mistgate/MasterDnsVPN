@@ -20,7 +20,6 @@ func TestRecheckInactiveResolver_EarlyExitsCompleteCandidate(t *testing.T) {
 			cfg := config.DefaultClientConfig()
 			cfg.Domains = []string{"v.example.com"}
 			cfg.Resolvers = []config.ResolverAddress{{IP: "127.0.0.1", Port: listener.LocalAddr().(*net.UDPAddr).Port}}
-			cfg.DataEncryptionMethod = 0
 			cfg.MTUTestTimeout = 10
 			cfg.MTUTestRetries = 1
 			c := createTestFastStartClient(t, cfg)

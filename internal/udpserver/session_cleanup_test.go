@@ -85,11 +85,10 @@ func TestCleanupClosedSessionClosesStreamsAndClearsQueues(t *testing.T) {
 	}
 	record.enqueueOrphanReset(Enums.PACKET_STREAM_RST, 1, 12)
 	s.deferredInflight[deferredTrackedPacketKey(VpnProto.Packet{
-		SessionID:     record.ID,
-		SessionCookie: record.Cookie,
-		PacketType:    Enums.PACKET_SOCKS5_SYN,
-		StreamID:      1,
-		SequenceNum:   12,
+		SessionID:   record.ID,
+		PacketType:  Enums.PACKET_SOCKS5_SYN,
+		StreamID:    1,
+		SequenceNum: 12,
 	})] = struct{}{}
 	if _, _, completed := s.socks5Fragments.Collect(
 		socks5FragmentKey{sessionID: record.ID, streamID: 1, sequenceNum: 12},
@@ -223,7 +222,6 @@ func TestSessionStoreCleanupReturnsExpiredRecordForFollowupCleanup(t *testing.T)
 	store := newSessionStore(8, 32)
 	record := newTestSessionRecord(9)
 	record.Signature[0] = 1
-	record.Cookie = 99
 	record.ResponseMode = 1
 	record.setLastActivity(time.Now().Add(-2 * time.Minute))
 
@@ -257,7 +255,6 @@ func TestSessionStoreCleanupKeepsActiveRecordOpen(t *testing.T) {
 	store := newSessionStore(8, 32)
 	record := newTestSessionRecord(10)
 	record.Signature[0] = 2
-	record.Cookie = 88
 	record.ResponseMode = 1
 	record.setLastActivity(time.Now())
 
@@ -329,17 +326,15 @@ func TestDequeueSessionResponseScansActiveStreams(t *testing.T) {
 func TestCleanupIdleDeferredSessionClearsDeferredStateWithoutClosingSession(t *testing.T) {
 	s := newTestServerForDeferredCleanup()
 	record := newTestSessionRecord(32)
-	record.Cookie = 7
 	record.setLastActivity(time.Now().Add(-time.Minute))
 	s.sessions = newSessionStore(8, 32)
 	s.sessions.byID[record.ID] = record
 
 	packet := VpnProto.Packet{
-		SessionID:     record.ID,
-		SessionCookie: record.Cookie,
-		PacketType:    Enums.PACKET_SOCKS5_SYN,
-		StreamID:      9,
-		SequenceNum:   4,
+		SessionID:   record.ID,
+		PacketType:  Enums.PACKET_SOCKS5_SYN,
+		StreamID:    9,
+		SequenceNum: 4,
 	}
 	s.deferredInflight[deferredTrackedPacketKey(packet)] = struct{}{}
 	if _, _, completed := s.socks5Fragments.Collect(
@@ -561,7 +556,6 @@ func TestSessionActiveStreamSnapshotUpdatesAfterMutations(t *testing.T) {
 func TestHandleStreamRSTRequestPreservesRstAckViaOrphanQueue(t *testing.T) {
 	s := newTestServerForStreamSyn("TCP")
 	record := newTestSessionRecord(14)
-	record.Cookie = 7
 	s.sessions.byID[record.ID] = record
 
 	stream := record.getOrCreateStream(9, arq.Config{}, nil, nil)
@@ -577,7 +571,6 @@ func TestHandleStreamRSTRequestPreservesRstAckViaOrphanQueue(t *testing.T) {
 
 	packet := VpnProto.Packet{
 		SessionID:      record.ID,
-		SessionCookie:  record.Cookie,
 		PacketType:     Enums.PACKET_STREAM_RST,
 		StreamID:       9,
 		HasStreamID:    true,
@@ -615,7 +608,6 @@ func TestHandleStreamRSTRequestPreservesRstAckViaOrphanQueue(t *testing.T) {
 func TestRecentlyClosedGracefulStreamSuppressesMissingStreamReset(t *testing.T) {
 	s := newTestServerForStreamSyn("TCP")
 	record := newTestSessionRecord(16)
-	record.Cookie = 9
 	s.sessions.byID[record.ID] = record
 
 	stream := record.getOrCreateStream(12, arq.Config{}, nil, nil)
@@ -626,11 +618,10 @@ func TestRecentlyClosedGracefulStreamSuppressesMissingStreamReset(t *testing.T) 
 	stream.OnARQClosed("close handshake completed")
 
 	packet := VpnProto.Packet{
-		SessionID:     record.ID,
-		SessionCookie: record.Cookie,
-		PacketType:    Enums.PACKET_STREAM_CLOSE_READ,
-		StreamID:      12,
-		HasStreamID:   true,
+		SessionID:   record.ID,
+		PacketType:  Enums.PACKET_STREAM_CLOSE_READ,
+		StreamID:    12,
+		HasStreamID: true,
 	}
 
 	if !s.preprocessInboundPacket(packet) {
@@ -648,7 +639,6 @@ func TestRecentlyClosedGracefulStreamSuppressesMissingStreamReset(t *testing.T) 
 func TestRecentlyClosedGracefulStreamStillAcksLateCloseWrite(t *testing.T) {
 	s := newTestServerForStreamSyn("TCP")
 	record := newTestSessionRecord(24)
-	record.Cookie = 9
 	s.sessions.byID[record.ID] = record
 
 	stream := record.getOrCreateStream(15, arq.Config{}, nil, nil)
@@ -659,11 +649,10 @@ func TestRecentlyClosedGracefulStreamStillAcksLateCloseWrite(t *testing.T) {
 	stream.OnARQClosed("close handshake completed")
 
 	packet := VpnProto.Packet{
-		SessionID:     record.ID,
-		SessionCookie: record.Cookie,
-		PacketType:    Enums.PACKET_STREAM_CLOSE_WRITE,
-		StreamID:      15,
-		HasStreamID:   true,
+		SessionID:   record.ID,
+		PacketType:  Enums.PACKET_STREAM_CLOSE_WRITE,
+		StreamID:    15,
+		HasStreamID: true,
 	}
 
 	if !s.preprocessInboundPacket(packet) {
@@ -682,7 +671,6 @@ func TestRecentlyClosedGracefulStreamStillAcksLateCloseWrite(t *testing.T) {
 func TestRecentlyClosedGracefulStreamLateDataQueuesRST(t *testing.T) {
 	s := newTestServerForStreamSyn("TCP")
 	record := newTestSessionRecord(25)
-	record.Cookie = 9
 	s.sessions.byID[record.ID] = record
 
 	stream := record.getOrCreateStream(16, arq.Config{}, nil, nil)
@@ -694,7 +682,6 @@ func TestRecentlyClosedGracefulStreamLateDataQueuesRST(t *testing.T) {
 
 	packet := VpnProto.Packet{
 		SessionID:      record.ID,
-		SessionCookie:  record.Cookie,
 		PacketType:     Enums.PACKET_STREAM_DATA,
 		StreamID:       16,
 		HasStreamID:    true,
@@ -719,16 +706,14 @@ func TestRecentlyClosedGracefulStreamLateDataQueuesRST(t *testing.T) {
 func TestRecentlyClosedNonSuppressedStreamStillQueuesMissingStreamReset(t *testing.T) {
 	s := newTestServerForStreamSyn("TCP")
 	record := newTestSessionRecord(17)
-	record.Cookie = 9
 	s.sessions.byID[record.ID] = record
 	record.noteStreamClosed(14, time.Now(), false)
 
 	packet := VpnProto.Packet{
-		SessionID:     record.ID,
-		SessionCookie: record.Cookie,
-		PacketType:    Enums.PACKET_STREAM_CLOSE_READ,
-		StreamID:      14,
-		HasStreamID:   true,
+		SessionID:   record.ID,
+		PacketType:  Enums.PACKET_STREAM_CLOSE_READ,
+		StreamID:    14,
+		HasStreamID: true,
 	}
 
 	if !s.preprocessInboundPacket(packet) {
@@ -773,7 +758,6 @@ func TestSweepRecentlyClosedStreamsPrunesExpiredEntries(t *testing.T) {
 func TestPreprocessInboundPacketDoesNotQueueImmediateDataAck(t *testing.T) {
 	s := newTestServerForStreamSyn("TCP")
 	record := newTestSessionRecord(19)
-	record.Cookie = 11
 	record.DownloadCompression = 0
 	s.sessions.byID[record.ID] = record
 
@@ -784,7 +768,6 @@ func TestPreprocessInboundPacketDoesNotQueueImmediateDataAck(t *testing.T) {
 
 	packet := VpnProto.Packet{
 		SessionID:      record.ID,
-		SessionCookie:  record.Cookie,
 		PacketType:     Enums.PACKET_STREAM_DATA,
 		StreamID:       31,
 		HasStreamID:    true,
@@ -806,7 +789,6 @@ func TestPreprocessInboundPacketDoesNotQueueImmediateDataAck(t *testing.T) {
 func TestOnStreamClosedCleansDeferredAndSOCKSArtifacts(t *testing.T) {
 	s := newTestServerForCleanup()
 	record := newTestSessionRecord(20)
-	record.Cookie = 13
 	record.streamCleanup = s.cleanupStreamArtifacts
 
 	stream := record.getOrCreateStream(33, arq.Config{}, nil, nil)
@@ -815,11 +797,10 @@ func TestOnStreamClosedCleansDeferredAndSOCKSArtifacts(t *testing.T) {
 	}
 
 	packet := VpnProto.Packet{
-		SessionID:     record.ID,
-		SessionCookie: record.Cookie,
-		PacketType:    Enums.PACKET_SOCKS5_SYN,
-		StreamID:      33,
-		SequenceNum:   4,
+		SessionID:   record.ID,
+		PacketType:  Enums.PACKET_SOCKS5_SYN,
+		StreamID:    33,
+		SequenceNum: 4,
 	}
 	s.deferredInflight[deferredTrackedPacketKey(packet)] = struct{}{}
 	if _, _, completed := s.socks5Fragments.Collect(

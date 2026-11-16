@@ -21,12 +21,11 @@ import (
 func TestGetStatsSnapshotAndDump(t *testing.T) {
 	cfg := config.DefaultClientConfig()
 	cfg.Domains = []string{"example.com"}
-	cfg.DataEncryptionMethod = 0
 	cfg.RuntimeStatsIntervalSeconds = 60.0
 	cfg.AutoSaveRankedResolvers = false
 
 	log := logger.New("TestLogger", "DEBUG")
-	c := New(cfg, log, nil)
+	c := New(cfg, log, clientTestCredential())
 
 	conns := []Connection{
 		{
@@ -130,7 +129,7 @@ func TestDumpRuntimeStats_FilterStandbyEligibility(t *testing.T) {
 	log := logger.New("stats-eligibility-test", "INFO")
 	os.Stdout = original
 
-	c := New(cfg, log, nil)
+	c := New(cfg, log, clientTestCredential())
 
 	conns := []Connection{
 		{Domain: "example.com", Resolver: "10.0.0.1", ResolverPort: 53, ResolverLabel: "10.0.0.1:53", Key: "active-conn", IsValid: true},
@@ -255,7 +254,7 @@ func TestLogResolverReactivatedFormatting(t *testing.T) {
 
 			cfg := config.DefaultClientConfig()
 			cfg.AutoSaveRankedResolvers = false
-			c := New(cfg, log, nil)
+			c := New(cfg, log, clientTestCredential())
 			defer c.Close()
 			conn := Connection{
 				Domain: "example.com", Resolver: "1.1.1.3", ResolverLabel: "1.1.1.3:53",
@@ -306,7 +305,7 @@ func TestRuntimeStatsLoopTerminatesOnContextDone(t *testing.T) {
 	cfg := config.DefaultClientConfig()
 	cfg.RuntimeStatsIntervalSeconds = 60.0
 
-	c := New(cfg, nil, nil)
+	c := New(cfg, nil, clientTestCredential())
 	ctx, cancel := context.WithCancel(context.Background())
 
 	done := make(chan struct{})
@@ -335,7 +334,7 @@ func TestClientSaveRankedResolversToFile(t *testing.T) {
 	cfg.AutoSaveRankedResolvers = true
 	cfg.MaxActiveResolvers = 2
 
-	c := New(cfg, nil, nil)
+	c := New(cfg, nil, clientTestCredential())
 	conns := []*Connection{
 		{Key: "1.1.1.1|53|example.com", Resolver: "1.1.1.1", ResolverPort: 53, Domain: "example.com", UploadMTUBytes: 120, DownloadMTUBytes: 1500},
 		{Key: "8.8.8.8|53|example.com", Resolver: "8.8.8.8", ResolverPort: 53, Domain: "example.com", UploadMTUBytes: 120, DownloadMTUBytes: 1500},
@@ -382,7 +381,7 @@ func TestClientSaveRankedResolversToFile(t *testing.T) {
 func TestRuntimeStatsLoopDisabled(t *testing.T) {
 	cfg := config.DefaultClientConfig()
 	cfg.RuntimeStatsIntervalSeconds = 0
-	c := New(cfg, nil, nil)
+	c := New(cfg, nil, clientTestCredential())
 	done := make(chan struct{})
 	go func() {
 		c.runRuntimeStatsLoop(context.Background())

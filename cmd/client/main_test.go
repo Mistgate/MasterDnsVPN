@@ -40,13 +40,13 @@ func TestParseClientCLIArgsAcceptsSinglePositionalConfigPath(t *testing.T) {
 }
 
 func TestParseClientCLIArgsAcceptsLegacyKeyAlias(t *testing.T) {
-	_, overrides, err := parseClientCLIArgs([]string{"-key", "secret-value"}, &bytes.Buffer{})
+	_, overrides, err := parseClientCLIArgs([]string{"-credential", "0102030405060708.0000000000000000000000000000000000000000000000000000000000000000"}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("parseClientCLIArgs returned error: %v", err)
 	}
-	got, ok := overrides.Values["EncryptionKey"].(string)
-	if !ok || got != "secret-value" {
-		t.Fatalf("unexpected encryption key override: %#v", overrides.Values["EncryptionKey"])
+	got, ok := overrides.Values["DeviceCredential"].(string)
+	if !ok || got != "0102030405060708.0000000000000000000000000000000000000000000000000000000000000000" {
+		t.Fatalf("unexpected device credential override: %#v", overrides.Values["DeviceCredential"])
 	}
 }
 

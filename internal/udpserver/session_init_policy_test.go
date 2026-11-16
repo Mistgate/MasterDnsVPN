@@ -1,6 +1,7 @@
 package udpserver
 
 import (
+	"bytes"
 	"encoding/binary"
 	"sync"
 	"testing"
@@ -9,8 +10,8 @@ import (
 	"masterdnsvpn-go/internal/compression"
 	"masterdnsvpn-go/internal/config"
 	DnsParser "masterdnsvpn-go/internal/dnsparser"
-	domainMatcher "masterdnsvpn-go/internal/domainmatcher"
 	Enums "masterdnsvpn-go/internal/enums"
+	"masterdnsvpn-go/internal/security"
 	VpnProto "masterdnsvpn-go/internal/vpnproto"
 )
 
@@ -63,27 +64,21 @@ func TestSessionStoreHonorsConfiguredActiveSessionLimit(t *testing.T) {
 	}
 }
 
-func TestHandleSessionInitRequestIncludesServerClientPolicy(t *testing.T) {
-	cfg := config.ServerConfig{
-		ClientMaxPacketDuplicationCount: 5,
-		ClientMaxSetupDuplicationCount:  6,
-		ClientMaxUploadMTU:              150,
-		ClientMaxDownloadMTU:            4096,
-		ClientMaxRxTxWorkers:            64,
-		ClientMinPingAggressiveInterval: 0.10,
-		ClientMaxPacketsPerBatch:        20,
-		ClientMaxARQWindowSize:          6000,
-		ClientMaxARQDataNackMaxGap:      200,
-		ClientMinCompressionMinSize:     120,
-		ClientMinARQInitialRTOSeconds:   0.25,
-	}
+func TestHandleSecureSessionInitIncludesServerClientPolicy(t *testing.T) {
+	cfg := config.DefaultServerConfig()
+	cfg.ClientMaxPacketDuplicationCount = 5
+	cfg.ClientMaxSetupDuplicationCount = 6
+	cfg.ClientMaxUploadMTU = 150
+	cfg.ClientMaxDownloadMTU = 4096
+	cfg.ClientMaxRxTxWorkers = 64
+	cfg.ClientMinPingAggressiveInterval = 0.10
+	cfg.ClientMaxPacketsPerBatch = 20
+	cfg.ClientMaxARQWindowSize = 6000
+	cfg.ClientMaxARQDataNackMaxGap = 200
+	cfg.ClientMinCompressionMinSize = 120
+	cfg.ClientMinARQInitialRTOSeconds = 0.25
 
-	s := &Server{
-		cfg:                     cfg,
-		sessions:                newSessionStore(16, 32),
-		uploadCompressionMask:   1 << compression.TypeOff,
-		downloadCompressionMask: 1 << compression.TypeOff,
-	}
+	s, credential := newProtocolTestServer(t, cfg, nil)
 
 	query, err := DnsParser.BuildTXTQuestionPacket("x.v.example.com", Enums.DNS_RECORD_TYPE_TXT, 4096)
 	if err != nil {
@@ -91,33 +86,31 @@ func TestHandleSessionInitRequestIncludesServerClientPolicy(t *testing.T) {
 	}
 
 	verifyCode := [4]byte{1, 2, 3, 4}
-	initPayload := make([]byte, sessionInitDataSize)
-	initPayload[0] = mtuProbeModeRaw
-	initPayload[1] = compression.PackPair(compression.TypeOff, compression.TypeOff)
-	binary.BigEndian.PutUint16(initPayload[2:4], 220)
-	binary.BigEndian.PutUint16(initPayload[4:6], 5000)
-	copy(initPayload[6:10], verifyCode[:])
-
-	response := s.handleSessionInitRequest(query, domainMatcher.Decision{RequestName: "x.v.example.com"}, VpnProto.Packet{
-		SessionID:  0,
-		PacketType: Enums.PACKET_SESSION_INIT,
-		Payload:    initPayload,
-	})
+	var parameters [security.InitParametersSize]byte
+	parameters[0] = mtuProbeModeRaw
+	parameters[1] = compression.PackPair(compression.TypeOff, compression.TypeOff)
+	binary.BigEndian.PutUint16(parameters[2:4], 220)
+	binary.BigEndian.PutUint16(parameters[4:6], 5000)
+	copy(parameters[6:10], verifyCode[:])
+	handshake, initMessage := makeProtocolTestInit(t, credential, parameters)
+	response := callSecureInit(s, query, "x.v.example.com", initMessage)
 	if response == nil {
 		t.Fatal("expected session accept response")
 	}
-
-	packet, err := DnsParser.ExtractVPNResponse(response, false)
+	acceptWire, err := DnsParser.ExtractVPNResponsePayload(response, false)
 	if err != nil {
-		t.Fatalf("ExtractVPNResponse returned error: %v", err)
+		t.Fatalf("ExtractVPNResponsePayload returned error: %v", err)
 	}
-	if packet.PacketType != Enums.PACKET_SESSION_ACCEPT {
-		t.Fatalf("unexpected packet type: got=%d want=%d", packet.PacketType, Enums.PACKET_SESSION_ACCEPT)
+	if len(acceptWire) > len(initMessage) {
+		t.Fatalf("accept response grew beyond init request: got=%d want<=%d", len(acceptWire), len(initMessage))
 	}
-
-	accept, err := VpnProto.DecodeSessionAcceptPayload(packet.Payload)
+	accepted, _, err := handshake.OpenAccept(acceptWire)
 	if err != nil {
-		t.Fatalf("DecodeSessionAcceptPayload returned error: %v", err)
+		t.Fatalf("OpenAccept returned error: %v", err)
+	}
+	accept, err := VpnProto.DecodeSessionAcceptV1Policy(accepted.SessionID, accepted.Policy)
+	if err != nil {
+		t.Fatalf("DecodeSessionAcceptV1Policy returned error: %v", err)
 	}
 	if !accept.HasClientPolicySync {
 		t.Fatal("expected session accept to include client policy sync block")
@@ -160,6 +153,66 @@ func TestHandleSessionInitRequestIncludesServerClientPolicy(t *testing.T) {
 	}
 }
 
+func TestHandleSecureSessionInitConcurrentDuplicatesShareAccept(t *testing.T) {
+	cfg := config.DefaultServerConfig()
+	cfg.ClientMaxUploadMTU = 150
+	cfg.ClientMaxDownloadMTU = 4096
+	s, credential := newProtocolTestServer(t, cfg, nil)
+	query, err := DnsParser.BuildTXTQuestionPacket("x.v.example.com", Enums.DNS_RECORD_TYPE_TXT, 4096)
+	if err != nil {
+		t.Fatalf("BuildTXTQuestionPacket returned error: %v", err)
+	}
+	var parameters [security.InitParametersSize]byte
+	parameters[0] = mtuProbeModeRaw
+	parameters[1] = compression.PackPair(compression.TypeOff, compression.TypeOff)
+	binary.BigEndian.PutUint16(parameters[2:4], 120)
+	binary.BigEndian.PutUint16(parameters[4:6], 400)
+	copy(parameters[6:10], []byte{1, 2, 3, 4})
+	handshake, initMessage := makeProtocolTestInit(t, credential, parameters)
+
+	const duplicates = 4
+	responses := make([][]byte, duplicates)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range duplicates {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			responses[i] = callSecureInit(s, query, "x.v.example.com", initMessage)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	var acceptWire []byte
+	for i, response := range responses {
+		if response == nil {
+			t.Fatalf("expected session accept response for duplicate %d", i)
+		}
+		got, err := DnsParser.ExtractVPNResponsePayload(response, false)
+		if err != nil {
+			t.Fatalf("ExtractVPNResponsePayload returned error: %v", err)
+		}
+		if i == 0 {
+			acceptWire = got
+		} else if !bytes.Equal(got, acceptWire) {
+			t.Fatalf("duplicate init returned a different accept: first=%x duplicate=%x", acceptWire, got)
+		}
+	}
+	accepted, _, err := handshake.OpenAccept(acceptWire)
+	if err != nil {
+		t.Fatalf("OpenAccept returned error: %v", err)
+	}
+	record, ok := s.sessions.Get(accepted.SessionID)
+	if !ok {
+		t.Fatalf("expected session %d to exist", accepted.SessionID)
+	}
+	if record.streamCleanup == nil {
+		t.Fatal("expected the session record to clean up stream artifacts")
+	}
+}
+
 func TestHandleStreamSynRequestRejectsWhenActiveStreamLimitIsReached(t *testing.T) {
 	store := newSessionStore(16, 32)
 	store.maxActiveStreams = 1
@@ -184,7 +237,6 @@ func TestHandleStreamSynRequestRejectsWhenActiveStreamLimitIsReached(t *testing.
 	s := &Server{sessions: store}
 	packet := VpnProto.Packet{
 		SessionID:      record.ID,
-		SessionCookie:  record.Cookie,
 		PacketType:     Enums.PACKET_STREAM_SYN,
 		StreamID:       2,
 		HasStreamID:    true,
@@ -208,74 +260,5 @@ func TestHandleStreamSynRequestRejectsWhenActiveStreamLimitIsReached(t *testing.
 	}
 	if orphan.StreamID != 2 || orphan.SequenceNum != 77 {
 		t.Fatalf("unexpected rejection packet identity: stream=%d seq=%d", orphan.StreamID, orphan.SequenceNum)
-	}
-}
-
-// A client races identical SESSION_INIT queries and resolvers retry them, so
-// the DNS workers handle duplicates of one session init at the same time and
-// all get the same session record. Run with -race.
-func TestHandleSessionInitRequestConcurrentDuplicatesShareSessionRecord(t *testing.T) {
-	s := New(config.ServerConfig{
-		ClientMaxUploadMTU:   150,
-		ClientMaxDownloadMTU: 4096,
-	}, nil, nil)
-
-	query, err := DnsParser.BuildTXTQuestionPacket("x.v.example.com", Enums.DNS_RECORD_TYPE_TXT, 4096)
-	if err != nil {
-		t.Fatalf("BuildTXTQuestionPacket returned error: %v", err)
-	}
-	initPayload := make([]byte, sessionInitDataSize)
-	initPayload[0] = mtuProbeModeRaw
-	initPayload[1] = compression.PackPair(compression.TypeOff, compression.TypeOff)
-	binary.BigEndian.PutUint16(initPayload[2:4], 120)
-	binary.BigEndian.PutUint16(initPayload[4:6], 400)
-	copy(initPayload[6:10], []byte{1, 2, 3, 4})
-	packet := VpnProto.Packet{
-		SessionID:  0,
-		PacketType: Enums.PACKET_SESSION_INIT,
-		Payload:    initPayload,
-	}
-
-	const duplicates = 4
-	responses := make([][]byte, duplicates)
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	for i := range duplicates {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			<-start
-			responses[i] = s.handleSessionInitRequest(query, domainMatcher.Decision{RequestName: "x.v.example.com"}, packet)
-		}()
-	}
-	close(start)
-	wg.Wait()
-
-	var sessionID uint8
-	for i, response := range responses {
-		if response == nil {
-			t.Fatalf("expected session accept response for duplicate %d", i)
-		}
-		accepted, err := DnsParser.ExtractVPNResponse(response, false)
-		if err != nil {
-			t.Fatalf("ExtractVPNResponse returned error: %v", err)
-		}
-		accept, err := VpnProto.DecodeSessionAcceptPayload(accepted.Payload)
-		if err != nil {
-			t.Fatalf("DecodeSessionAcceptPayload returned error: %v", err)
-		}
-		if i == 0 {
-			sessionID = accept.SessionID
-		} else if accept.SessionID != sessionID {
-			t.Fatalf("expected duplicates to share session %d, got %d", sessionID, accept.SessionID)
-		}
-	}
-
-	record, ok := s.sessions.Get(sessionID)
-	if !ok {
-		t.Fatalf("expected session %d to exist", sessionID)
-	}
-	if record.streamCleanup == nil {
-		t.Fatal("expected the session record to clean up stream artifacts")
 	}
 }

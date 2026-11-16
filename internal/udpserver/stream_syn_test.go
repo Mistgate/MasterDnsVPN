@@ -104,7 +104,7 @@ func TestQueueImmediateControlAckCreatesStreamForStreamSyn(t *testing.T) {
 	record.DownloadCompression = 0
 	s.sessions.byID[record.ID] = record
 
-	packet := packetWithSession(Enums.PACKET_STREAM_SYN, record.ID, record.Cookie, 1)
+	packet := packetWithSession(Enums.PACKET_STREAM_SYN, record.ID, 1)
 	if !s.queueImmediateControlAck(record, packet) {
 		t.Fatal("expected STREAM_SYN immediate ACK to be queued")
 	}
@@ -133,7 +133,7 @@ func TestProcessDeferredStreamSynQueuesConnectedAndEnablesIO(t *testing.T) {
 		return local, nil
 	}
 
-	packet := packetWithSession(Enums.PACKET_STREAM_SYN, record.ID, record.Cookie, 2)
+	packet := packetWithSession(Enums.PACKET_STREAM_SYN, record.ID, 2)
 	s.processDeferredStreamSyn(context.Background(), packet)
 
 	stream, ok := record.getStream(2)
@@ -176,7 +176,7 @@ func TestProcessDeferredStreamSynDoesNotAttachAfterCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	packet := packetWithSession(Enums.PACKET_STREAM_SYN, record.ID, record.Cookie, 16)
+	packet := packetWithSession(Enums.PACKET_STREAM_SYN, record.ID, 16)
 	go func() {
 		defer close(done)
 		s.processDeferredStreamSyn(ctx, packet)
@@ -244,7 +244,7 @@ func TestHandleStreamSynFastPathsAlreadyConnectedStream(t *testing.T) {
 		t.Fatal("expected queued duplicate lane")
 	}
 
-	packet := packetWithSession(Enums.PACKET_STREAM_SYN, record.ID, record.Cookie, stream.ID)
+	packet := packetWithSession(Enums.PACKET_STREAM_SYN, record.ID, stream.ID)
 	if !s.handleStreamSynRequest(packet, viewForRecord(record)) {
 		t.Fatal("expected connected stream SYN to be handled")
 	}
@@ -281,7 +281,7 @@ func TestHandleSOCKS5SynFastPathsAlreadyConnectedStream(t *testing.T) {
 		t.Fatal("expected queued duplicate lane")
 	}
 
-	packet := packetWithSession(Enums.PACKET_SOCKS5_SYN, record.ID, record.Cookie, stream.ID)
+	packet := packetWithSession(Enums.PACKET_SOCKS5_SYN, record.ID, stream.ID)
 	packet.Payload = []byte{0x01, 149, 154, 167, 92, 0x01, 0xBB}
 	packet.TotalFragments = 1
 	if !s.handleSOCKS5SynRequest(packet, viewForRecord(record)) {
@@ -315,7 +315,7 @@ func TestProcessDeferredSOCKS5SynDoesNotAttachAfterCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	packet := packetWithSession(Enums.PACKET_SOCKS5_SYN, record.ID, record.Cookie, 17)
+	packet := packetWithSession(Enums.PACKET_SOCKS5_SYN, record.ID, 17)
 	packet.Payload = []byte{0x01, 149, 154, 167, 92, 0x01, 0xBB}
 	packet.TotalFragments = 1
 	go func() {
@@ -380,7 +380,7 @@ func TestHandleSOCKS5SynFastPathRejectsDifferentTarget(t *testing.T) {
 	stream.Status = "CONNECTED"
 	stream.mu.Unlock()
 
-	packet := packetWithSession(Enums.PACKET_SOCKS5_SYN, record.ID, record.Cookie, stream.ID)
+	packet := packetWithSession(Enums.PACKET_SOCKS5_SYN, record.ID, stream.ID)
 	packet.Payload = []byte{0x01, 149, 154, 167, 92, 0x00, 0x50}
 	packet.TotalFragments = 1
 	if !s.handleSOCKS5SynRequest(packet, viewForRecord(record)) {
@@ -404,7 +404,7 @@ func TestHandleSOCKS5SynImmediateRejectsBlockedTarget(t *testing.T) {
 		t.Fatal("expected stream to exist")
 	}
 
-	packet := packetWithSession(Enums.PACKET_SOCKS5_SYN, record.ID, record.Cookie, stream.ID)
+	packet := packetWithSession(Enums.PACKET_SOCKS5_SYN, record.ID, stream.ID)
 	packet.Payload = []byte{0x01, 0, 0, 0, 0, 0x01, 0xBB}
 	packet.TotalFragments = 1
 	if !s.handleSOCKS5SynRequest(packet, viewForRecord(record)) {
@@ -427,7 +427,7 @@ func TestHandleStreamSynDedupesPendingDeferredDuplicates(t *testing.T) {
 	record.DownloadCompression = 0
 	s.sessions.byID[record.ID] = record
 
-	packet := packetWithSession(Enums.PACKET_STREAM_SYN, record.ID, record.Cookie, 9)
+	packet := packetWithSession(Enums.PACKET_STREAM_SYN, record.ID, 9)
 	if !s.handleStreamSynRequest(packet, viewForRecord(record)) {
 		t.Fatal("expected first STREAM_SYN to be accepted")
 	}
@@ -452,7 +452,7 @@ func TestHandleStreamSynDedupesPendingDeferredDuplicates(t *testing.T) {
 
 func TestClearDeferredPacketsForStreamAllowsFreshRequeue(t *testing.T) {
 	s := newTestServerForStreamSyn("TCP")
-	packet := packetWithSession(Enums.PACKET_STREAM_SYN, 7, 3, 9)
+	packet := packetWithSession(Enums.PACKET_STREAM_SYN, 7, 9)
 
 	if !s.tryBeginDeferredPacket(packet) {
 		t.Fatal("expected first deferred marker to be recorded")
@@ -699,17 +699,6 @@ func TestDeferredSessionProcessorCompactKeepsCancelledMarkerForInFlightTask(t *t
 	}
 }
 
-func TestInvalidSessionDropLogConfigRecentlyClosedIgnoresReceivedCookie(t *testing.T) {
-	key1, interval1 := invalidSessionDropLogConfig("recently closed session", 3, 10, 241, 0)
-	key2, interval2 := invalidSessionDropLogConfig("recently closed session", 3, 99, 241, 0)
-	if key1 != key2 {
-		t.Fatalf("expected recently closed session log key to ignore received cookie, got %q vs %q", key1, key2)
-	}
-	if interval1 != 3*time.Second || interval2 != 3*time.Second {
-		t.Fatalf("expected recently closed session interval to be 3s, got %s and %s", interval1, interval2)
-	}
-}
-
 func TestProcessDeferredSOCKS5SynSkipsDialForRecentlyClosedStream(t *testing.T) {
 	s := newTestServerForStreamSyn("SOCKS5")
 	record := newTestSessionRecord(25)
@@ -722,7 +711,7 @@ func TestProcessDeferredSOCKS5SynSkipsDialForRecentlyClosedStream(t *testing.T) 
 		return nil, nil
 	}
 
-	packet := packetWithSession(Enums.PACKET_SOCKS5_SYN, record.ID, record.Cookie, 10)
+	packet := packetWithSession(Enums.PACKET_SOCKS5_SYN, record.ID, 10)
 	packet.Payload = []byte{0x01, 127, 0, 0, 1, 0x01, 0xBB}
 	packet.TotalFragments = 1
 
@@ -743,7 +732,7 @@ func TestProcessDeferredSOCKS5SynClearsQueuedDuplicatesAfterConnectFailure(t *te
 		t.Fatal("expected queued duplicate lane")
 	}
 
-	packet := packetWithSession(Enums.PACKET_SOCKS5_SYN, record.ID, record.Cookie, 15)
+	packet := packetWithSession(Enums.PACKET_SOCKS5_SYN, record.ID, 15)
 	packet.Payload = []byte{0x01, 127, 0, 0, 1, 0x01, 0xBB}
 	packet.TotalFragments = 1
 
@@ -766,7 +755,7 @@ func TestProcessDeferredStreamSynQueuesConnectFailOnDialError(t *testing.T) {
 		return nil, errors.New("dial failed")
 	}
 
-	packet := packetWithSession(Enums.PACKET_STREAM_SYN, record.ID, record.Cookie, 3)
+	packet := packetWithSession(Enums.PACKET_STREAM_SYN, record.ID, 3)
 	s.processDeferredStreamSyn(context.Background(), packet)
 
 	stream, ok := record.getStream(3)
@@ -797,7 +786,7 @@ func TestProcessDeferredStreamSynIgnoresLateDialCompletionAfterSessionClose(t *t
 		return conn, nil
 	}
 
-	packet := packetWithSession(Enums.PACKET_STREAM_SYN, record.ID, record.Cookie, 30)
+	packet := packetWithSession(Enums.PACKET_STREAM_SYN, record.ID, 30)
 	s.processDeferredStreamSyn(context.Background(), packet)
 
 	record.StreamsMu.RLock()
@@ -839,7 +828,7 @@ func TestProcessDeferredStreamSynTimesOutBlockedDial(t *testing.T) {
 		return nil, nil
 	}
 
-	packet := packetWithSession(Enums.PACKET_STREAM_SYN, record.ID, record.Cookie, 4)
+	packet := packetWithSession(Enums.PACKET_STREAM_SYN, record.ID, 4)
 	startedAt := time.Now()
 	s.processDeferredStreamSyn(context.Background(), packet)
 	if elapsed := time.Since(startedAt); elapsed > 250*time.Millisecond {
@@ -872,7 +861,7 @@ func TestProcessDeferredStreamSynClearsQueuedDuplicatesAfterDialFailure(t *testi
 		t.Fatal("expected queued duplicate lane")
 	}
 
-	packet := packetWithSession(Enums.PACKET_STREAM_SYN, record.ID, record.Cookie, 12)
+	packet := packetWithSession(Enums.PACKET_STREAM_SYN, record.ID, 12)
 	s.processDeferredStreamSyn(context.Background(), packet)
 
 	if pending := s.deferredConnectSession.workers[0].pending.Load(); pending != 0 {
@@ -921,7 +910,7 @@ func TestProcessDeferredSOCKS5SynTimesOutBlockedDial(t *testing.T) {
 		return nil, nil
 	}
 
-	packet := packetWithSession(Enums.PACKET_SOCKS5_SYN, record.ID, record.Cookie, 5)
+	packet := packetWithSession(Enums.PACKET_SOCKS5_SYN, record.ID, 5)
 	packet.Payload = []byte{0x01, 149, 154, 167, 92, 0x01, 0xBB}
 	packet.TotalFragments = 1
 	startedAt := time.Now()
@@ -947,7 +936,7 @@ func TestHandlePostSessionPacketRejectsMismatchedSynProtocol(t *testing.T) {
 	record := newTestSessionRecord(24)
 	s.sessions.byID[record.ID] = record
 
-	packet := packetWithSession(Enums.PACKET_STREAM_SYN, record.ID, record.Cookie, 4)
+	packet := packetWithSession(Enums.PACKET_STREAM_SYN, record.ID, 4)
 	if handled := s.handlePostSessionPacket(packet, viewForRecord(record)); handled {
 		t.Fatal("expected TCP STREAM_SYN to be rejected when server protocol is SOCKS5")
 	}
@@ -1133,10 +1122,9 @@ func TestMapSOCKSConnectErrorMapsBlockedTargetToRulesetDenied(t *testing.T) {
 	}
 }
 
-func packetWithSession(packetType uint8, sessionID uint8, cookie uint8, streamID uint16) VpnProto.Packet {
+func packetWithSession(packetType uint8, sessionID uint8, streamID uint16) VpnProto.Packet {
 	return VpnProto.Packet{
 		SessionID:      sessionID,
-		SessionCookie:  cookie,
 		PacketType:     packetType,
 		StreamID:       streamID,
 		HasStreamID:    true,

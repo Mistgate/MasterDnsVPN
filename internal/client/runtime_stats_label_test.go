@@ -22,7 +22,7 @@ func TestRuntimeStatsLabelsSeededSamples(t *testing.T) {
 	os.Stdout = original
 	cfg := config.DefaultClientConfig()
 	cfg.AutoSaveRankedResolvers = false
-	c := New(cfg, log, nil)
+	c := New(cfg, log, clientTestCredential())
 	c.balancer.SetConnections([]*Connection{{Key: "resolver", Resolver: "127.0.0.1", ResolverPort: 53, Domain: "example.com"}})
 	c.balancer.SeedBurstStats("resolver", 10, 8, 10*time.Millisecond)
 	c.balancer.SetConnectionValidity("resolver", true)

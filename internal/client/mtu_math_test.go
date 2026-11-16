@@ -9,7 +9,7 @@ func TestEncodedCharsForPayloadUsesWorstCaseUploadPacketType(t *testing.T) {
 	c := createTestClient(t)
 
 	got := c.encodedCharsForPayload(120)
-	want := c.encodedCharsForPacketPayload(maxUploadProbePacketType, 120)
+	want := c.encodedCharsForPacketPayload(maxUploadProbePacketType, 120-uploadProbeSlack)
 	if got != want {
 		t.Fatalf("expected worst-case encoded char count, got=%d want=%d", got, want)
 	}
@@ -18,9 +18,12 @@ func TestEncodedCharsForPayloadUsesWorstCaseUploadPacketType(t *testing.T) {
 func TestEncodedCharsForPayloadMatchesMaxUploadProbeCapacityModel(t *testing.T) {
 	c := createTestClient(t)
 
-	payloadLen := 120
-	if !c.canBuildUploadPayload("example.com", payloadLen) {
-		t.Fatalf("expected payload length %d to fit generated upload MTU question", payloadLen)
+	payloadLen := c.maxUploadMTUPayload("example.com")
+	if payloadLen <= 0 || !c.canBuildUploadPayload("example.com", payloadLen) {
+		t.Fatalf("expected computed payload capacity %d to fit generated upload MTU question", payloadLen)
+	}
+	if c.canBuildUploadPayload("example.com", payloadLen+1) {
+		t.Fatalf("expected payload capacity + 1 (%d) to exceed generated upload MTU question", payloadLen+1)
 	}
 
 	got := c.encodedCharsForPayload(payloadLen)

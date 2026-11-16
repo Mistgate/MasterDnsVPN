@@ -5,11 +5,34 @@ import (
 	"time"
 
 	"masterdnsvpn-go/internal/config"
+	"masterdnsvpn-go/internal/logger"
+	"masterdnsvpn-go/internal/security"
+	"masterdnsvpn-go/internal/udpserver"
 )
+
+const testDeviceCredential = "0102030405060708.0000000000000000000000000000000000000000000000000000000000000000"
+
+func clientTestCredential() security.Credential {
+	credential, err := security.ParseCredential(testDeviceCredential)
+	if err != nil {
+		panic(err)
+	}
+	return credential
+}
+
+func clientTestUDPServer(cfg config.ServerConfig, log *logger.Logger) *udpserver.Server {
+	index, err := security.NewMemoryCredentialIndex([]security.Credential{clientTestCredential()})
+	if err != nil {
+		panic(err)
+	}
+	server := udpserver.New(cfg, log)
+	server.SetCredentialIndex(index)
+	return server
+}
 
 func buildTestClientWithResolvers(cfg config.ClientConfig, keys ...string) *Client {
 	cfg.AutoSaveRankedResolvers = false
-	c := New(cfg, nil, nil)
+	c := New(cfg, nil, clientTestCredential())
 	c.active_streams = make(map[uint16]*Stream_client)
 
 	connections := make([]Connection, 0, len(keys))

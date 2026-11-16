@@ -75,7 +75,7 @@ func TestNewFallbackServerUsesFullUDPPacketBuffer(t *testing.T) {
 	server := New(config.ServerConfig{
 		FallbackAddress: "127.0.0.1:5353",
 		MaxPacketSize:   512,
-	}, nil, nil)
+	}, nil)
 	buffer := server.packetPool.Get().([]byte)
 	if len(buffer) != udpFallbackMaxUDPPacketSize {
 		t.Fatalf("unexpected fallback packet buffer: got=%d want=%d", len(buffer), udpFallbackMaxUDPPacketSize)

@@ -91,7 +91,6 @@ func TestClientDiscoveryConfig_PreservesDefaultsAndOverrides(t *testing.T) {
 			cfg := config.DefaultClientConfig()
 			cfg.Domains = []string{"example.com"}
 			cfg.Resolvers = []config.ResolverAddress{{IP: "127.0.0.1", Port: 53}}
-			cfg.DataEncryptionMethod = 0
 			cfg.AutoSaveRankedResolvers = false
 			cfg.MicroBurstPacketCount = 1
 			cfg.MicroBurstParallelism = 0

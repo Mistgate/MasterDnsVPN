@@ -60,7 +60,7 @@ func requireServed(t *testing.T, served <-chan struct{}) {
 
 func TestDialUDPResolverUsesProtectServer(t *testing.T) {
 	path, served := startStubProtectServer(t, 0x01)
-	c := New(config.ClientConfig{FDControlUnixSocket: path}, nil, nil)
+	c := New(config.ClientConfig{FDControlUnixSocket: path}, nil, clientTestCredential())
 
 	conn, err := c.dialUDPResolver(context.Background(), "127.0.0.1:53")
 	if err != nil {
@@ -72,7 +72,7 @@ func TestDialUDPResolverUsesProtectServer(t *testing.T) {
 
 func TestListenUDPProtectedUsesProtectServer(t *testing.T) {
 	path, served := startStubProtectServer(t, 0x01)
-	c := New(config.ClientConfig{FDControlUnixSocket: path}, nil, nil)
+	c := New(config.ClientConfig{FDControlUnixSocket: path}, nil, clientTestCredential())
 
 	conn, err := c.listenUDPProtected(context.Background(), "0.0.0.0:0")
 	if err != nil {
@@ -84,7 +84,7 @@ func TestListenUDPProtectedUsesProtectServer(t *testing.T) {
 
 func TestListenUDPProtectedFailsOnProtectFailure(t *testing.T) {
 	path, _ := startStubProtectServer(t, 0x00)
-	c := New(config.ClientConfig{FDControlUnixSocket: path}, nil, nil)
+	c := New(config.ClientConfig{FDControlUnixSocket: path}, nil, clientTestCredential())
 
 	conn, err := c.listenUDPProtected(context.Background(), "0.0.0.0:0")
 	if err == nil {

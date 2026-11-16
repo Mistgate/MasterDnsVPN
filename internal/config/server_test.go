@@ -80,7 +80,6 @@ func TestLoadServerConfigWithOverridesAppliesFlagPrecedence(t *testing.T) {
 PROTOCOL_TYPE = "SOCKS5"
 UDP_PORT = 53
 DOMAIN = ["config.example.com"]
-DATA_ENCRYPTION_METHOD = 1
 SUPPORTED_UPLOAD_COMPRESSION_TYPES = [0, 3]
 SUPPORTED_DOWNLOAD_COMPRESSION_TYPES = [0, 3]
 `), 0o644); err != nil {
@@ -91,7 +90,7 @@ SUPPORTED_DOWNLOAD_COMPRESSION_TYPES = [0, 3]
 		Values: map[string]any{
 			"UDPPort":                           5300,
 			"Domain":                            []string{"flag.example.com", "alt.example.com"},
-			"DataEncryptionMethod":              2,
+			"DeviceCredential":                  "1111111111111111.2222222222222222222222222222222222222222222222222222222222222222",
 			"SupportedUploadCompressionTypes":   []int{0, 1},
 			"SupportedDownloadCompressionTypes": []int{0, 1, 3},
 		},
@@ -106,8 +105,8 @@ SUPPORTED_DOWNLOAD_COMPRESSION_TYPES = [0, 3]
 	if len(cfg.Domain) != 2 || cfg.Domain[0] != "flag.example.com" || cfg.Domain[1] != "alt.example.com" {
 		t.Fatalf("unexpected domain override: %+v", cfg.Domain)
 	}
-	if cfg.DataEncryptionMethod != 2 {
-		t.Fatalf("unexpected data encryption override: got=%d want=%d", cfg.DataEncryptionMethod, 2)
+	if cfg.DeviceCredential != "1111111111111111.2222222222222222222222222222222222222222222222222222222222222222" {
+		t.Fatalf("unexpected device credential override: got=%q", cfg.DeviceCredential)
 	}
 	if len(cfg.SupportedUploadCompressionTypes) != 2 || cfg.SupportedUploadCompressionTypes[0] != 0 || cfg.SupportedUploadCompressionTypes[1] != 1 {
 		t.Fatalf("unexpected upload compression override: %+v", cfg.SupportedUploadCompressionTypes)
@@ -130,7 +129,7 @@ func TestServerConfigFlagBinderBuildsOverridesForSetFlagsOnly(t *testing.T) {
 		"-domain=a.example.com,b.example.com",
 		"-use-external-socks5",
 		"-supported-upload-compression-types=0,1",
-		"-data-encryption-method=2",
+		"-device-credential=0102030405060708.0000000000000000000000000000000000000000000000000000000000000000",
 	}); err != nil {
 		t.Fatalf("flag parse failed: %v", err)
 	}
@@ -145,8 +144,8 @@ func TestServerConfigFlagBinderBuildsOverridesForSetFlagsOnly(t *testing.T) {
 	if got, ok := overrides.Values["UseExternalSOCKS5"].(bool); !ok || !got {
 		t.Fatalf("unexpected socks5 override: %#v", overrides.Values["UseExternalSOCKS5"])
 	}
-	if got, ok := overrides.Values["DataEncryptionMethod"].(int); !ok || got != 2 {
-		t.Fatalf("unexpected encryption method override: %#v", overrides.Values["DataEncryptionMethod"])
+	if got, ok := overrides.Values["DeviceCredential"].(string); !ok || got != "0102030405060708.0000000000000000000000000000000000000000000000000000000000000000" {
+		t.Fatalf("unexpected device credential override: %#v", overrides.Values["DeviceCredential"])
 	}
 	gotDomains, ok := overrides.Values["Domain"].([]string)
 	if !ok || len(gotDomains) != 2 || gotDomains[0] != "a.example.com" || gotDomains[1] != "b.example.com" {
@@ -269,7 +268,6 @@ func TestServerConfigClientPolicyLimitsAreSafelyClamped(t *testing.T) {
 PROTOCOL_TYPE = "SOCKS5"
 UDP_PORT = 53
 DOMAIN = ["config.example.com"]
-DATA_ENCRYPTION_METHOD = 1
 SUPPORTED_UPLOAD_COMPRESSION_TYPES = [0, 3]
 SUPPORTED_DOWNLOAD_COMPRESSION_TYPES = [0, 3]
 MAX_ALLOWED_CLIENT_PACKET_DUPLICATION_COUNT = 999
@@ -345,7 +343,6 @@ func TestLoadServerConfigFallsBackToJSONWhenTOMLIsMissing(t *testing.T) {
   "PROTOCOL_TYPE": "SOCKS5",
   "UDP_PORT": 5300,
   "DOMAIN": ["json.example.com"],
-  "DATA_ENCRYPTION_METHOD": 1,
   "SUPPORTED_UPLOAD_COMPRESSION_TYPES": [0, 3],
   "SUPPORTED_DOWNLOAD_COMPRESSION_TYPES": [0, 3]
 }`), 0o644); err != nil {
@@ -370,7 +367,6 @@ func TestLoadServerConfigFromJSONBase64AppliesDefaults(t *testing.T) {
   "PROTOCOL_TYPE": "SOCKS5",
   "UDP_PORT": 5301,
   "DOMAIN": ["base64.example.com"],
-  "DATA_ENCRYPTION_METHOD": 1,
   "SUPPORTED_UPLOAD_COMPRESSION_TYPES": [0, 3],
   "SUPPORTED_DOWNLOAD_COMPRESSION_TYPES": [0, 3]
 }`
@@ -399,7 +395,6 @@ func TestLoadServerConfigFromJSONBase64WithOverridesAppliesBeforeFinalize(t *tes
 	rawJSON := `{
   "PROTOCOL_TYPE": "SOCKS5",
   "UDP_PORT": 5301,
-  "DATA_ENCRYPTION_METHOD": 1,
   "SUPPORTED_UPLOAD_COMPRESSION_TYPES": [0, 3],
   "SUPPORTED_DOWNLOAD_COMPRESSION_TYPES": [0, 3]
 }`

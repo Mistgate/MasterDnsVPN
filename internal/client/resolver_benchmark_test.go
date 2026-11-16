@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"masterdnsvpn-go/internal/config"
-	"masterdnsvpn-go/internal/security"
 )
 
 var (
@@ -32,6 +31,7 @@ var (
 // (or MDNS_BENCHMARK_RESOLVERS/MDNS_BENCHMARK_DOMAIN env vars) are provided, it profiles:
 //   - T_ready: Time elapsed until Session initialization begins (MinReady met)
 //   - T_coverage: Time elapsed until 100% of configured pairings receive qualification
+//
 // This probe-only benchmark does not measure foreground application throughput.
 func TestBenchmark_RealNetwork_FastStart(t *testing.T) {
 	resolversPath := *benchResolversFile
@@ -89,10 +89,7 @@ func TestBenchmark_RealNetwork_FastStart(t *testing.T) {
 	cfg.MTUTestParallelism = 4
 	cfg.AutoSaveRankedResolvers = false
 
-	codec, err := security.NewCodec(cfg.DataEncryptionMethod, cfg.EncryptionKey)
-	if err != nil {
-		t.Fatalf("client codec init failed: %v", err)
-	}
+	codec := clientTestCredential()
 	client := New(cfg, nil, codec)
 	defer client.Close()
 	if err := client.BuildConnectionMap(); err != nil {

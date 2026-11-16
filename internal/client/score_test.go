@@ -420,4 +420,3 @@ func TestScore_EvaluateResolver_NaNInfRobustness(t *testing.T) {
 		})
 	}
 }
-

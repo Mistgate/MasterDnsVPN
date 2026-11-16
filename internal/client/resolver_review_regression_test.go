@@ -211,7 +211,6 @@ func TestBackgroundBurstLimitsActualQueryStarts(t *testing.T) {
 	listener, port, count := startMockMTUDNSListener(t, "v.example.com")
 	defer listener.Close()
 	cfg := config.DefaultClientConfig()
-	cfg.DataEncryptionMethod = 0
 	cfg.Domains = []string{"v.example.com"}
 	cfg.Resolvers = []config.ResolverAddress{{IP: "127.0.0.1", Port: port}}
 	c := createTestFastStartClient(t, cfg)
@@ -244,7 +243,6 @@ func TestRateLimitedRecoveryFinishesConfiguredBurst(t *testing.T) {
 	listener, port, queries := startMockMTUDNSListener(t, "v.example.com")
 	defer listener.Close()
 	cfg := config.DefaultClientConfig()
-	cfg.DataEncryptionMethod = 0
 	cfg.Domains = []string{"v.example.com"}
 	cfg.Resolvers = []config.ResolverAddress{{IP: "127.0.0.1", Port: port}}
 	cfg.RecheckBurstTestEnabled, cfg.RecheckBurstPacketCount = true, 32
