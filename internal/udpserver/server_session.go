@@ -18,7 +18,7 @@ import (
 	VpnProto "masterdnsvpn-go/internal/vpnproto"
 )
 
-func (s *Server) validatePostSessionPacket(questionPacket []byte, requestName string, vpnPacket VpnProto.Packet) postSessionValidation {
+func (s *Server) validatePostSessionPacket(vpnPacket VpnProto.Packet) postSessionValidation {
 	now := time.Now()
 	validation := s.sessions.ValidateAndTouch(vpnPacket.SessionID, now)
 	if validation.Valid {
@@ -54,7 +54,7 @@ func (s *Server) handleSessionCloseNotice(vpnPacket VpnProto.Packet, now time.Ti
 	}
 }
 
-func (s *Server) buildSessionVPNResponse(questionPacket []byte, requestName string, record *sessionRuntimeView, packet VpnProto.Packet) []byte {
+func (s *Server) buildSessionVPNResponse(qc *queryContext, questionPacket []byte, parsed DnsParser.LitePacket, record *sessionRuntimeView, packet VpnProto.Packet) []byte {
 	if record == nil || record.Crypto == nil {
 		return nil
 	}
@@ -73,7 +73,12 @@ func (s *Server) buildSessionVPNResponse(questionPacket []byte, requestName stri
 	if err != nil {
 		return nil
 	}
-	response, err := DnsParser.BuildVPNResponsePayload(questionPacket, requestName, frame, record.ResponseBase64)
+	if qc != nil && qc.hasCounter && record.Answers != nil && packet.PacketType != Enums.PACKET_PONG {
+		// The answer may be lost, or come back too big for UDP and be asked
+		// again over TCP: keep the sealed frame for the repeat (see answerCache).
+		record.Answers.put(qc.counter, frame, qc.src.Addr(), time.Now())
+	}
+	response, err := DnsParser.BuildVPNResponseFromLite(questionPacket, parsed, frame, record.ResponseBase64)
 	if err != nil {
 		return nil
 	}
@@ -181,7 +186,7 @@ func (s *Server) finalizeStreamArtifacts(sessionID uint8, streamID uint16) {
 	s.removeSOCKS5SynFragmentsForStream(sessionID, streamID)
 }
 
-func (s *Server) serveQueuedOrPong(questionPacket []byte, requestName string, record *sessionRuntimeView, now time.Time) []byte {
+func (s *Server) serveQueuedOrPong(qc *queryContext, questionPacket []byte, parsed DnsParser.LitePacket, record *sessionRuntimeView, now time.Time) []byte {
 	if record == nil {
 		return nil
 	}
@@ -189,11 +194,11 @@ func (s *Server) serveQueuedOrPong(questionPacket []byte, requestName string, re
 	sessionID := record.ID
 
 	if pkt, ok := s.dequeueSessionResponse(sessionID, now); ok {
-		return s.buildSessionVPNResponse(questionPacket, requestName, record, *pkt)
+		return s.buildSessionVPNResponse(qc, questionPacket, parsed, record, *pkt)
 	}
 
 	payload := s.nextPongPayload()
-	return s.buildSessionVPNResponse(questionPacket, requestName, record, VpnProto.Packet{
+	return s.buildSessionVPNResponse(qc, questionPacket, parsed, record, VpnProto.Packet{
 		PacketType: Enums.PACKET_PONG,
 		Payload:    payload[:],
 	})

@@ -24,7 +24,11 @@ func TestAuthenticatedMTUDownProbeBuildsEncryptedPayload(t *testing.T) {
 	copy(payload[1:1+mtuProbeCodeLength], []byte{1, 2, 3, 4})
 	binary.BigEndian.PutUint16(payload[mtuProbeUpMinSize:mtuProbeDownMinSize], 40)
 
-	response := s.handleAuthenticatedMTUProbe(query, "x.v.example.com", credential, VpnProto.Packet{
+	parsedQuery, err := DnsParser.ParseDNSRequestLite(query)
+	if err != nil {
+		t.Fatalf("ParseDNSRequestLite returned error: %v", err)
+	}
+	response := s.handleAuthenticatedMTUProbe(query, parsedQuery, credential, VpnProto.Packet{
 		PacketType:  Enums.PACKET_MTU_DOWN_REQ,
 		StreamID:    1,
 		SequenceNum: 2,

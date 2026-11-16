@@ -185,7 +185,7 @@ func TestBuildFormatErrorResponseUsesFORMERR(t *testing.T) {
 	}
 }
 
-func TestBuildEmptyNoErrorResponseBuildsResolverLikeFlags(t *testing.T) {
+func TestBuildEmptyNoErrorResponseBuildsNonRecursiveFlags(t *testing.T) {
 	request := buildDNSQuery(0x1357, "example.com", Enums.DNS_RECORD_TYPE_A, false)
 	binary.BigEndian.PutUint16(request[2:4], 0x0700)
 	request[2] |= 0x02 // AA
@@ -201,8 +201,8 @@ func TestBuildEmptyNoErrorResponseBuildsResolverLikeFlags(t *testing.T) {
 	if flags&(1<<15) == 0 {
 		t.Fatal("response must set QR")
 	}
-	if flags&(1<<7) == 0 {
-		t.Fatal("response must set RA")
+	if flags&(1<<7) != 0 {
+		t.Fatal("response must not claim recursion (RA)")
 	}
 	if flags&(1<<8) == 0 {
 		t.Fatal("response must preserve RD")
@@ -211,10 +211,10 @@ func TestBuildEmptyNoErrorResponseBuildsResolverLikeFlags(t *testing.T) {
 		t.Fatal("response must preserve CD")
 	}
 	if flags&(1<<10) != 0 {
-		t.Fatal("resolver-like synthetic response must clear AA")
+		t.Fatal("synthetic negative response must clear AA")
 	}
 	if flags&(1<<9) != 0 {
-		t.Fatal("resolver-like synthetic response must clear TC")
+		t.Fatal("synthetic negative response must clear TC")
 	}
 	if got := (flags >> 11) & 0xF; got != 0 {
 		t.Fatalf("unexpected opcode bits: got=%d want=0", got)

@@ -8,6 +8,7 @@
 package udpserver
 
 import (
+	"context"
 	"errors"
 	"net"
 	"strings"
@@ -66,7 +67,7 @@ func cloneInflightBytes(value []byte) []byte {
 	return append([]byte(nil), value...)
 }
 
-func (s *Server) buildDNSQueryResponsePayload(rawQuery []byte, sessionID uint8, sequenceNum uint16) []byte {
+func (s *Server) buildDNSQueryResponsePayload(ctx context.Context, credentialID string, rawQuery []byte, sessionID uint8, sequenceNum uint16) []byte {
 	parsed, err := DnsParser.ParseDNSRequestLite(rawQuery)
 	if err != nil {
 		if errors.Is(err, DnsParser.ErrNotDNSRequest) || errors.Is(err, DnsParser.ErrPacketTooShort) {
@@ -138,7 +139,7 @@ func (s *Server) buildDNSQueryResponsePayload(rawQuery []byte, sessionID uint8, 
 		return response
 	}
 
-	resolved, err := s.resolveDNSUpstream(rawQuery)
+	resolved, err := s.resolveDNSUpstream(ctx, credentialID, rawQuery)
 	if s.log != nil {
 		s.log.Debugf(
 			"🔎 <green>Tunnel DNS Upstream Lookup</green> <magenta>|</magenta> <blue>Domain</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Type</blue>: <yellow>%s</yellow> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Seq</blue>: <cyan>%d</cyan>",
@@ -249,9 +250,20 @@ func (s *Server) fragmentDNSResponsePayload(response []byte, mtu int) [][]byte {
 	return fragments
 }
 
-func (s *Server) resolveDNSUpstream(rawQuery []byte) ([]byte, error) {
-	if s != nil && s.resolveDNSQueryFn != nil {
-		return s.resolveDNSQueryFn(rawQuery)
+func (s *Server) resolveDNSUpstream(ctx context.Context, credentialID string, rawQuery []byte) ([]byte, error) {
+	if s != nil {
+		if hooks := s.hooks.Load(); hooks != nil && hooks.ResolveDNS != nil {
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			timeout := s.cfg.DNSUpstreamTimeout()
+			if timeout <= 0 {
+				timeout = 4 * time.Second
+			}
+			resolveCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			return hooks.ResolveDNS(resolveCtx, credentialID, rawQuery)
+		}
 	}
 	if len(rawQuery) == 0 || len(s.dnsUpstreamServers) == 0 {
 		return nil, ErrInvalidDNSUpstream
@@ -367,6 +379,10 @@ func (s *Server) queryOneUpstream(upstream string, rawQuery []byte, timeout time
 	n, readErr := conn.Read(buffer)
 	_ = conn.Close()
 
+	if readErr == nil && n == len(buffer) {
+		// The answer filled the buffer and may have been cut.
+		readErr = ErrInvalidDNSUpstream
+	}
 	if readErr != nil || n == 0 {
 		s.dnsUpstreamBufferPool.Put(buffer)
 		if readErr == nil {

@@ -11,13 +11,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
-	Enums "masterdnsvpn-go/internal/enums"
 	"masterdnsvpn-go/internal/logger"
 )
 
@@ -29,11 +29,6 @@ type upstreamSOCKS5Error struct {
 type blockedSOCKSTargetError struct {
 	host string
 }
-
-var (
-	externalSOCKS5NoAuthGreeting = []byte{0x05, 0x01, 0x00}
-	externalSOCKS5UserPassAuth   = []byte{0x05, 0x01, 0x02}
-)
 
 type socks5FragmentKey struct {
 	sessionID   uint8
@@ -62,28 +57,30 @@ func (e *blockedSOCKSTargetError) Error() string {
 	return fmt.Sprintf("blocked socks target: %s", e.host)
 }
 
-func (s *Server) dialSOCKSStreamTarget(host string, port uint16, targetPayload []byte) (net.Conn, error) {
-	return s.dialSOCKSStreamTargetContext(context.Background(), host, port, targetPayload)
+func (s *Server) dialSOCKSStreamTarget(host string, port uint16) (net.Conn, error) {
+	return s.dialSOCKSStreamTargetContext(context.Background(), "", host, port)
 }
 
-func (s *Server) dialSOCKSStreamTargetContext(ctx context.Context, host string, port uint16, targetPayload []byte) (net.Conn, error) {
+// dialSOCKSStreamTargetContext connects a stream of the session of a
+// credential to host:port. The target comes from the client and is checked
+// here before anything is dialed; the dialer (the Dial hook, or this package's
+// own) decides what a name resolves to.
+func (s *Server) dialSOCKSStreamTargetContext(ctx context.Context, credentialID string, host string, port uint16) (net.Conn, error) {
 	if s == nil {
-		return nil, &upstreamSOCKS5Error{
-			packetType: Enums.PACKET_SOCKS5_UPSTREAM_UNAVAILABLE,
-			err:        errors.New("server unavailable"),
-		}
+		return nil, &upstreamSOCKS5Error{err: errors.New("server unavailable")}
 	}
 
 	if err := validateSOCKSTargetHost(host); err != nil {
 		return nil, err
 	}
 
-	if !s.useExternalSOCKS5 || len(targetPayload) == 0 {
-		return s.dialTCPTargetContext(ctx, net.JoinHostPort(host, strconv.Itoa(int(port))))
-	}
-	return s.dialExternalSOCKS5TargetContext(ctx, targetPayload)
+	return s.dialTCPTargetContext(ctx, credentialID, net.JoinHostPort(host, strconv.Itoa(int(port))))
 }
 
+// validateSOCKSTargetHost is the first of two checks of a target host: it
+// rejects empty names, localhost and address literals that are not public
+// unicast addresses. A name that resolves to a private address passes it; the
+// standalone dialer rejects that after resolution (see controlBlockedAddress).
 func validateSOCKSTargetHost(host string) error {
 	trimmed := strings.TrimSpace(host)
 	if trimmed == "" {
@@ -99,7 +96,15 @@ func validateSOCKSTargetHost(host string) error {
 	if ip == nil {
 		return nil
 	}
+	if blockedTargetIP(ip) {
+		return &blockedSOCKSTargetError{host: host}
+	}
+	return nil
+}
 
+// blockedTargetIP reports whether a stream may not be connected to ip: anything
+// that is not a public unicast address, and the shared and benchmarking ranges.
+func blockedTargetIP(ip net.IP) bool {
 	if !ip.IsGlobalUnicast() ||
 		ip.IsLoopback() ||
 		ip.IsPrivate() ||
@@ -107,27 +112,56 @@ func validateSOCKSTargetHost(host string) error {
 		ip.IsLinkLocalUnicast() ||
 		ip.IsLinkLocalMulticast() ||
 		ip.IsUnspecified() {
-		return &blockedSOCKSTargetError{host: host}
+		return true
 	}
 
 	if v4 := ip.To4(); v4 != nil {
 		if v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127 {
-			return &blockedSOCKSTargetError{host: host}
+			return true
 		}
 		if v4[0] == 198 && (v4[1] == 18 || v4[1] == 19) {
-			return &blockedSOCKSTargetError{host: host}
+			return true
 		}
 	}
+	return false
+}
 
+// controlBlockedAddress is the second check, made by the standalone dialer for
+// every connection attempt after the name was resolved: an address that is
+// private, loopback or link local is refused, so a name that points into the
+// server's own network cannot be used to reach it. A host that supplies a Dial
+// hook makes this decision itself.
+func controlBlockedAddress(network, address string, _ syscall.RawConn) error {
+	addrPort, err := netip.ParseAddrPort(address)
+	if err != nil {
+		return &blockedSOCKSTargetError{host: address}
+	}
+	if blockedTargetIP(net.IP(addrPort.Addr().Unmap().AsSlice())) {
+		return &blockedSOCKSTargetError{host: addrPort.Addr().String()}
+	}
 	return nil
 }
 
 func (s *Server) dialTCPTarget(address string) (net.Conn, error) {
-	return s.dialTCPTargetContext(context.Background(), address)
+	return s.dialTCPTargetContext(context.Background(), "", address)
 }
 
-func (s *Server) dialTCPTargetContext(ctx context.Context, address string) (net.Conn, error) {
-	dialFn := s.dialStreamUpstreamFn
+// dialTCPTargetContext dials a target that a client chose: the standalone
+// dialer refuses private addresses after resolution.
+func (s *Server) dialTCPTargetContext(ctx context.Context, credentialID string, address string) (net.Conn, error) {
+	return s.dialTargetContext(ctx, credentialID, address, true)
+}
+
+// dialForwardContext dials the fixed forward target of PROTOCOL_TYPE "TCP",
+// which the operator configured and which may well be local.
+func (s *Server) dialForwardContext(ctx context.Context, credentialID string, address string) (net.Conn, error) {
+	return s.dialTargetContext(ctx, credentialID, address, false)
+}
+
+func (s *Server) dialTargetContext(ctx context.Context, credentialID string, address string, restrict bool) (net.Conn, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	timeout := s.socksConnectTimeout
 	if timeout <= 0 {
 		timeout = s.cfg.SOCKSConnectTimeout()
@@ -140,34 +174,42 @@ func (s *Server) dialTCPTargetContext(ctx context.Context, address string) (net.
 	}
 	startedAt := logger.NowUnixNano()
 
-	if dialFn == nil {
+	hooks := s.hooks.Load()
+	if hooks == nil || hooks.Dial == nil {
 		dialer := net.Dialer{Timeout: timeout}
-		conn, err := dialer.DialContext(ctx, "tcp", address)
-		return conn, err
+		if restrict {
+			dialer.Control = controlBlockedAddress
+		}
+		return dialer.DialContext(ctx, "tcp", address)
 	}
-	if ctx == nil {
-		conn, err := dialFn("tcp", address, timeout)
-		return conn, err
-	}
+
+	dialCtx, cancel := context.WithTimeout(ctx, timeout)
 	type dialResult struct {
 		conn net.Conn
 		err  error
 	}
 	resultCh := make(chan dialResult, 1)
 	go func() {
-		conn, err := dialFn("tcp", address, timeout)
+		conn, err := hooks.Dial(dialCtx, credentialID, "tcp", address)
 		resultCh <- dialResult{conn: conn, err: err}
 	}()
 	select {
-	case <-ctx.Done():
+	case <-dialCtx.Done():
+		// The hook did not return in time (or ignored the context): give up on
+		// it and close whatever it returns later.
 		go func() {
 			result := <-resultCh
+			cancel()
 			if result.conn != nil {
 				_ = result.conn.Close()
 			}
 		}()
-		return nil, ctx.Err()
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return nil, context.DeadlineExceeded
 	case result := <-resultCh:
+		cancel()
 		if s != nil && s.log != nil {
 			s.log.Debugf(
 				"DEFER upstream-connect-finish | address=%s | dur_ms=%d | err=%v",
@@ -178,209 +220,6 @@ func (s *Server) dialTCPTargetContext(ctx context.Context, address string) (net.
 		}
 		return result.conn, result.err
 	}
-}
-
-func (s *Server) dialExternalSOCKS5Target(targetPayload []byte) (net.Conn, error) {
-	return s.dialExternalSOCKS5TargetContext(context.Background(), targetPayload)
-}
-
-func (s *Server) dialExternalSOCKS5TargetContext(ctx context.Context, targetPayload []byte) (net.Conn, error) {
-	conn, err := s.dialTCPTargetContext(ctx, s.externalSOCKS5Address)
-	if err != nil {
-		return nil, err
-	}
-
-	stopCancelWatch := func() bool { return true }
-	if ctx != nil {
-		stopCancelWatch = context.AfterFunc(ctx, func() {
-			_ = conn.Close()
-		})
-	}
-
-	timeout := s.socksConnectTimeout
-	if timeout <= 0 {
-		timeout = s.cfg.SOCKSConnectTimeout()
-	}
-	if timeout > 0 {
-		_ = conn.SetDeadline(time.Now().Add(timeout))
-	}
-
-	if err := writeAll(conn, s.externalSOCKS5Greeting()); err != nil {
-		_ = conn.Close()
-		return nil, &upstreamSOCKS5Error{packetType: Enums.PACKET_SOCKS5_UPSTREAM_UNAVAILABLE, err: err}
-	}
-
-	var greeting [2]byte
-
-	if _, err := io.ReadFull(conn, greeting[:]); err != nil {
-		_ = conn.Close()
-		return nil, &upstreamSOCKS5Error{packetType: Enums.PACKET_SOCKS5_UPSTREAM_UNAVAILABLE, err: err}
-	}
-	if greeting[0] != 0x05 {
-		_ = conn.Close()
-		return nil, &upstreamSOCKS5Error{
-			packetType: Enums.PACKET_SOCKS5_UPSTREAM_UNAVAILABLE,
-			err:        errors.New("upstream proxy is not a valid SOCKS5 server"),
-		}
-	}
-	if err := s.handleExternalSOCKS5Auth(conn, greeting[1]); err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
-
-	request := make([]byte, 3+len(targetPayload))
-	request[0] = 0x05
-	request[1] = 0x01
-	request[2] = 0x00
-	copy(request[3:], targetPayload)
-
-	if err := writeAll(conn, request); err != nil {
-		_ = conn.Close()
-		return nil, &upstreamSOCKS5Error{packetType: Enums.PACKET_SOCKS5_UPSTREAM_UNAVAILABLE, err: err}
-	}
-
-	var header [4]byte
-
-	if _, err := io.ReadFull(conn, header[:]); err != nil {
-		_ = conn.Close()
-		return nil, &upstreamSOCKS5Error{packetType: Enums.PACKET_SOCKS5_UPSTREAM_UNAVAILABLE, err: err}
-	}
-	if header[0] != 0x05 {
-		_ = conn.Close()
-		return nil, &upstreamSOCKS5Error{
-			packetType: Enums.PACKET_SOCKS5_UPSTREAM_UNAVAILABLE,
-			err:        errors.New("invalid external SOCKS5 connect response"),
-		}
-	}
-	if header[1] != 0x00 {
-		_ = conn.Close()
-		return nil, &upstreamSOCKS5Error{
-			packetType: socks5ReplyPacketType(header[1]),
-			err:        fmt.Errorf("external SOCKS5 failed to connect to target: code %d", header[1]),
-		}
-	}
-	if err := discardSOCKS5BoundAddress(conn, header[3]); err != nil {
-		_ = conn.Close()
-		return nil, &upstreamSOCKS5Error{packetType: Enums.PACKET_SOCKS5_UPSTREAM_UNAVAILABLE, err: err}
-	}
-	if !stopCancelWatch() {
-		_ = conn.Close()
-		if ctx != nil && ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, &upstreamSOCKS5Error{
-			packetType: Enums.PACKET_SOCKS5_UPSTREAM_UNAVAILABLE,
-			err:        errors.New("external SOCKS5 handshake cancelled"),
-		}
-	}
-	_ = conn.SetDeadline(time.Time{})
-	return conn, nil
-}
-
-func (s *Server) externalSOCKS5Greeting() []byte {
-	if s != nil && s.externalSOCKS5Auth {
-		return externalSOCKS5UserPassAuth
-	}
-	return externalSOCKS5NoAuthGreeting
-}
-
-func (s *Server) handleExternalSOCKS5Auth(conn net.Conn, method byte) error {
-	if !s.externalSOCKS5Auth {
-		if method == 0x00 {
-			return nil
-		}
-		return &upstreamSOCKS5Error{
-			packetType: Enums.PACKET_SOCKS5_AUTH_FAILED,
-			err:        errors.New("external SOCKS5 requires unsupported authentication method"),
-		}
-	}
-
-	if method != 0x02 {
-		return &upstreamSOCKS5Error{
-			packetType: Enums.PACKET_SOCKS5_AUTH_FAILED,
-			err:        errors.New("external SOCKS5 authentication method mismatch"),
-		}
-	}
-
-	request := make([]byte, 3+len(s.externalSOCKS5User)+len(s.externalSOCKS5Pass))
-	request[0] = 0x01
-	request[1] = byte(len(s.externalSOCKS5User))
-	offset := 2
-	offset += copy(request[offset:], s.externalSOCKS5User)
-	request[offset] = byte(len(s.externalSOCKS5Pass))
-	offset++
-	copy(request[offset:], s.externalSOCKS5Pass)
-	if err := writeAll(conn, request); err != nil {
-		return &upstreamSOCKS5Error{packetType: Enums.PACKET_SOCKS5_AUTH_FAILED, err: err}
-	}
-
-	var response [2]byte
-	if _, err := io.ReadFull(conn, response[:]); err != nil {
-		return &upstreamSOCKS5Error{packetType: Enums.PACKET_SOCKS5_AUTH_FAILED, err: err}
-	}
-	if response[1] != 0x00 {
-		return &upstreamSOCKS5Error{
-			packetType: Enums.PACKET_SOCKS5_AUTH_FAILED,
-			err:        errors.New("external SOCKS5 authentication failed"),
-		}
-	}
-	return nil
-}
-
-func discardSOCKS5BoundAddress(conn net.Conn, atyp byte) error {
-	length := 0
-	switch atyp {
-	case 0x01:
-		length = 4 + 2
-	case 0x03:
-		var dlen [1]byte
-		if _, err := io.ReadFull(conn, dlen[:]); err != nil {
-			return err
-		}
-		length = int(dlen[0]) + 2
-	case 0x04:
-		length = 16 + 2
-	default:
-		return errors.New("unsupported SOCKS5 bound address type")
-	}
-	if length == 0 {
-		return nil
-	}
-	var buffer [257]byte
-	_, err := io.ReadFull(conn, buffer[:length])
-	return err
-}
-
-func socks5ReplyPacketType(reply byte) uint8 {
-	switch reply {
-	case 0x02:
-		return Enums.PACKET_SOCKS5_RULESET_DENIED
-	case 0x03:
-		return Enums.PACKET_SOCKS5_NETWORK_UNREACHABLE
-	case 0x04:
-		return Enums.PACKET_SOCKS5_HOST_UNREACHABLE
-	case 0x05:
-		return Enums.PACKET_SOCKS5_CONNECTION_REFUSED
-	case 0x06:
-		return Enums.PACKET_SOCKS5_TTL_EXPIRED
-	case 0x07:
-		return Enums.PACKET_SOCKS5_COMMAND_UNSUPPORTED
-	case 0x08:
-		return Enums.PACKET_SOCKS5_ADDRESS_TYPE_UNSUPPORTED
-	default:
-		return Enums.PACKET_SOCKS5_CONNECT_FAIL
-	}
-}
-
-func writeAll(conn net.Conn, payload []byte) error {
-	for len(payload) != 0 {
-		n, err := conn.Write(payload)
-		if err != nil {
-			return err
-		}
-		payload = payload[n:]
-	}
-	return nil
 }
 
 func (s *Server) collectSOCKS5SynFragments(sessionID uint8, streamID uint16, sequenceNum uint16, payload []byte, fragmentID uint8, totalFragments uint8, now time.Time) ([]byte, bool, bool) {

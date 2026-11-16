@@ -34,7 +34,7 @@ func TestBuildAndExtractVPNResponsePacketSingleAnswer(t *testing.T) {
 		t.Fatalf("BuildTXTQuestionPacket returned error: %v", err)
 	}
 
-	response, err := BuildVPNResponsePacket(query, "x.v.example.com", VpnProto.Packet{
+	response, err := BuildVPNResponsePacket(query, VpnProto.Packet{
 		SessionID:  9,
 		PacketType: Enums.PACKET_MTU_UP_RES,
 		Payload:    []byte("challenge"),
@@ -62,7 +62,7 @@ func TestBuildAndExtractVPNResponsePacketChunked(t *testing.T) {
 	}
 
 	payload := bytes.Repeat([]byte{0xAB}, 700)
-	response, err := BuildVPNResponsePacket(query, "x.v.example.com", VpnProto.Packet{
+	response, err := BuildVPNResponsePacket(query, VpnProto.Packet{
 		SessionID:   7,
 		PacketType:  Enums.PACKET_MTU_DOWN_RES,
 		StreamID:    1,
@@ -91,7 +91,7 @@ func TestBuildAndExtractVPNResponsePacketSingleAnswerBaseEncoded(t *testing.T) {
 		t.Fatalf("BuildTXTQuestionPacket returned error: %v", err)
 	}
 
-	response, err := BuildVPNResponsePacket(query, "x.v.example.com", VpnProto.Packet{
+	response, err := BuildVPNResponsePacket(query, VpnProto.Packet{
 		SessionID:  9,
 		PacketType: Enums.PACKET_MTU_UP_RES,
 		Payload:    []byte("challenge"),
@@ -119,7 +119,7 @@ func TestBuildAndExtractVPNResponsePacketChunkedBaseEncoded(t *testing.T) {
 	}
 
 	payload := bytes.Repeat([]byte{0xAB}, 700)
-	response, err := BuildVPNResponsePacket(query, "x.v.example.com", VpnProto.Packet{
+	response, err := BuildVPNResponsePacket(query, VpnProto.Packet{
 		SessionID:   7,
 		PacketType:  Enums.PACKET_MTU_DOWN_RES,
 		StreamID:    1,
@@ -149,7 +149,7 @@ func TestBuildAndExtractVPNResponsePacketCompressed(t *testing.T) {
 	}
 
 	payload := bytes.Repeat([]byte("abcdabcdabcdabcd"), 16)
-	response, err := BuildVPNResponsePacket(query, "x.v.example.com", VpnProto.Packet{
+	response, err := BuildVPNResponsePacket(query, VpnProto.Packet{
 		SessionID:      7,
 		PacketType:     Enums.PACKET_STREAM_DATA,
 		StreamID:       1,
@@ -174,13 +174,13 @@ func TestBuildAndExtractVPNResponsePacketCompressed(t *testing.T) {
 	}
 }
 
-func TestBuildVPNResponsePacketPreservesOriginalQuestionCaseInAnswerName(t *testing.T) {
+func TestBuildVPNResponsePacketCompressesOwnerAndKeepsQuestionCase(t *testing.T) {
 	query, err := BuildTXTQuestionPacket("ANHfwjAU21.aa.CoM", Enums.DNS_RECORD_TYPE_TXT, 4096)
 	if err != nil {
 		t.Fatalf("BuildTXTQuestionPacket returned error: %v", err)
 	}
 
-	response, err := BuildVPNResponsePacket(query, "anhfwjau21.aa.com", VpnProto.Packet{
+	response, err := BuildVPNResponsePacket(query, VpnProto.Packet{
 		SessionID:  9,
 		PacketType: Enums.PACKET_MTU_UP_RES,
 		Payload:    []byte("challenge"),
@@ -202,9 +202,14 @@ func TestBuildVPNResponsePacketPreservesOriginalQuestionCaseInAnswerName(t *test
 
 	rawMixedCase := encodeDNSName("ANHfwjAU21.aa.CoM")
 	questionEnd := dnsHeaderSize + len(rawMixedCase) + 4
-	answerStart := questionEnd
-	if !bytes.Equal(response[answerStart:answerStart+len(rawMixedCase)], rawMixedCase) {
-		t.Fatal("answer owner name must preserve original question wire casing")
+	if !bytes.Equal(response[dnsHeaderSize:dnsHeaderSize+len(rawMixedCase)], rawMixedCase) {
+		t.Fatal("the question must keep its original wire casing")
+	}
+	if response[questionEnd] != 0xC0 || response[questionEnd+1] != 0x0C {
+		t.Fatalf("answer owner must be the compression pointer 0xC00C, got %x", response[questionEnd:questionEnd+2])
+	}
+	if got := len(response) - len(query); got > VPNResponseOverhead+len("challenge")+16 {
+		t.Fatalf("answer adds %d bytes to the question, expected about %d", got, VPNResponseOverhead+len("challenge"))
 	}
 }
 
@@ -237,7 +242,7 @@ func TestExtractVPNResponseReordersChunkedAnswers(t *testing.T) {
 	copy(reordered, chunks)
 	reordered[1], reordered[2] = reordered[2], reordered[1]
 
-	response, err := BuildTXTResponsePacket(query, "x.v.example.com", reordered)
+	response, err := BuildTXTResponsePacket(query, reordered)
 	if err != nil {
 		t.Fatalf("BuildTXTResponsePacket returned error: %v", err)
 	}
@@ -391,7 +396,7 @@ func FuzzExtractVPNResponsePayload(f *testing.F) {
 	}
 	frame := bytes.Repeat([]byte{0xa5}, 700)
 	for _, base64Mode := range []bool{false, true} {
-		response, err := BuildVPNResponsePayload(query, "x.v.example.com", frame, base64Mode)
+		response, err := BuildVPNResponsePayload(query, frame, base64Mode)
 		if err != nil {
 			f.Fatal(err)
 		}

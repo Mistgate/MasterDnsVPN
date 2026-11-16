@@ -309,7 +309,7 @@ func answerSessionInitQueries(t *testing.T, c *Client, resolver *net.UDPConn, ve
 			if err != nil || len(parsed.Questions) == 0 {
 				continue
 			}
-			response, err := DnsParser.BuildVPNResponsePayload(query, parsed.Questions[0].Name, accept, base64Reply)
+			response, err := DnsParser.BuildVPNResponsePayload(query, accept, base64Reply)
 			if err != nil {
 				continue
 			}

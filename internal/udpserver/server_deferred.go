@@ -20,8 +20,6 @@ import (
 	VpnProto "masterdnsvpn-go/internal/vpnproto"
 )
 
-const maxDeferredConnectAttemptTimeout = 15 * time.Second
-
 func (s *Server) deferredConnectAttemptTimeout() time.Duration {
 	timeout := s.socksConnectTimeout
 	if timeout <= 0 {
@@ -29,9 +27,6 @@ func (s *Server) deferredConnectAttemptTimeout() time.Duration {
 	}
 	if timeout <= 0 {
 		timeout = 8 * time.Second
-	}
-	if timeout > maxDeferredConnectAttemptTimeout {
-		return maxDeferredConnectAttemptTimeout
 	}
 	return timeout
 }
@@ -48,7 +43,7 @@ func (s *Server) processDeferredDNSQuery(ctx context.Context, sessionID uint8, s
 		return
 	}
 
-	rawResponse := s.buildDNSQueryResponsePayload(assembledQuery, sessionID, sequenceNum)
+	rawResponse := s.buildDNSQueryResponsePayload(ctx, s.sessionCredentialID(sessionID), assembledQuery, sessionID, sequenceNum)
 	if len(rawResponse) == 0 {
 		return
 	}
@@ -152,7 +147,7 @@ func (s *Server) processDeferredStreamSyn(ctx context.Context, vpnPacket VpnProt
 	attemptCtx, cancelAttempt := context.WithTimeout(ctx, attemptTimeout)
 	defer cancelAttempt()
 
-	upstreamConn, err := s.dialTCPTargetContext(attemptCtx, net.JoinHostPort(s.cfg.ForwardIP, strconv.Itoa(s.cfg.ForwardPort)))
+	upstreamConn, err := s.dialForwardContext(attemptCtx, record.credentialID(), net.JoinHostPort(s.cfg.ForwardIP, strconv.Itoa(s.cfg.ForwardPort)))
 
 	if err != nil {
 		timedOut := errors.Is(attemptCtx.Err(), context.DeadlineExceeded)
@@ -347,7 +342,7 @@ func (s *Server) processDeferredSOCKS5Syn(ctx context.Context, vpnPacket VpnProt
 	attemptCtx, cancelAttempt := context.WithTimeout(ctx, attemptTimeout)
 	defer cancelAttempt()
 
-	upstreamConn, err := s.dialSOCKSStreamTargetContext(attemptCtx, target.Host, target.Port, assembledTarget)
+	upstreamConn, err := s.dialSOCKSStreamTargetContext(attemptCtx, record.credentialID(), target.Host, target.Port)
 
 	if err != nil {
 		timedOut := errors.Is(attemptCtx.Err(), context.DeadlineExceeded)

@@ -80,8 +80,6 @@ func TestLoadServerConfigWithOverridesAppliesFlagPrecedence(t *testing.T) {
 PROTOCOL_TYPE = "SOCKS5"
 UDP_PORT = 53
 DOMAIN = ["config.example.com"]
-SUPPORTED_UPLOAD_COMPRESSION_TYPES = [0, 3]
-SUPPORTED_DOWNLOAD_COMPRESSION_TYPES = [0, 3]
 `), 0o644); err != nil {
 		t.Fatalf("WriteFile config failed: %v", err)
 	}
@@ -119,7 +117,7 @@ func TestServerConfigFlagBinderBuildsOverridesForSetFlagsOnly(t *testing.T) {
 		"-udp-port=5300",
 		"--fallback=[2001:db8::1]:5353",
 		"-domain=a.example.com,b.example.com",
-		"-use-external-socks5",
+		"-tcp-enabled=false",
 		"-device-credential=0102030405060708.0000000000000000000000000000000000000000000000000000000000000000",
 	}); err != nil {
 		t.Fatalf("flag parse failed: %v", err)
@@ -132,8 +130,8 @@ func TestServerConfigFlagBinderBuildsOverridesForSetFlagsOnly(t *testing.T) {
 	if got, ok := overrides.Values["FallbackAddress"].(string); !ok || got != "[2001:db8::1]:5353" {
 		t.Fatalf("unexpected fallback override: %#v", overrides.Values["FallbackAddress"])
 	}
-	if got, ok := overrides.Values["UseExternalSOCKS5"].(bool); !ok || !got {
-		t.Fatalf("unexpected socks5 override: %#v", overrides.Values["UseExternalSOCKS5"])
+	if got, ok := overrides.Values["TCPEnabled"].(bool); !ok || got {
+		t.Fatalf("unexpected tcp override: %#v", overrides.Values["TCPEnabled"])
 	}
 	if got, ok := overrides.Values["DeviceCredential"].(string); !ok || got != "0102030405060708.0000000000000000000000000000000000000000000000000000000000000000" {
 		t.Fatalf("unexpected device credential override: %#v", overrides.Values["DeviceCredential"])
@@ -203,7 +201,7 @@ func TestServerConfigFallbackAddressValidation(t *testing.T) {
 	}
 }
 
-func TestServerConfigEffectiveSizingUsesSmartFloorsAndDerivedCapacities(t *testing.T) {
+func TestServerConfigEffectiveSizingFollowsConfiguredLimits(t *testing.T) {
 	cfg := defaultServerConfig()
 	cfg.ProtocolType = "SOCKS5"
 	cfg.UDPReaders = 1
@@ -221,17 +219,17 @@ func TestServerConfigEffectiveSizingUsesSmartFloorsAndDerivedCapacities(t *testi
 	if got := cfg.EffectiveDNSRequestWorkers(); got < cfg.EffectiveUDPReaders()+1 {
 		t.Fatalf("expected dns workers to track reader pressure, got=%d readers=%d", got, cfg.EffectiveUDPReaders())
 	}
-	if got := cfg.EffectiveDeferredSessionQueueLimit(); got < 256 {
-		t.Fatalf("expected deferred queue smart floor, got=%d", got)
+	if got := cfg.EffectiveDeferredSessionQueueLimit(); got != 64 {
+		t.Fatalf("the configured deferred queue is authoritative, got=%d", got)
 	}
-	if got := cfg.EffectiveMaxConcurrentRequests(); got < 4096 {
-		t.Fatalf("expected max concurrent requests smart floor, got=%d", got)
+	if got := cfg.EffectiveMaxConcurrentRequests(); got != 512 {
+		t.Fatalf("the configured request queue is authoritative, got=%d", got)
 	}
 	if got := cfg.EffectiveMaxPacketsPerBatch(); got < 10 {
 		t.Fatalf("expected max packets per batch smart floor, got=%d", got)
 	}
-	if got := cfg.EffectiveDNSCacheMaxRecords(); got < cfg.EffectiveMaxConcurrentRequests()*2 {
-		t.Fatalf("expected dns cache smart floor, got=%d concurrent=%d", got, cfg.EffectiveMaxConcurrentRequests())
+	if got := cfg.EffectiveDNSCacheMaxRecords(); got != 100 {
+		t.Fatalf("the configured dns cache size is authoritative, got=%d", got)
 	}
 	if got := cfg.EffectiveSessionOrphanQueueInitialCap(); got < 32 {
 		t.Fatalf("expected derived orphan queue cap, got=%d", got)
@@ -255,8 +253,6 @@ func TestServerConfigClientPolicyLimitsAreSafelyClamped(t *testing.T) {
 PROTOCOL_TYPE = "SOCKS5"
 UDP_PORT = 53
 DOMAIN = ["config.example.com"]
-SUPPORTED_UPLOAD_COMPRESSION_TYPES = [0, 3]
-SUPPORTED_DOWNLOAD_COMPRESSION_TYPES = [0, 3]
 MAX_ALLOWED_CLIENT_PACKET_DUPLICATION_COUNT = 999
 MAX_ALLOWED_CLIENT_SETUP_PACKET_DUPLICATION_COUNT = 999
 MAX_ALLOWED_CLIENT_ACTIVE_SESSION = 999
@@ -268,7 +264,6 @@ MIN_ALLOWED_CLIENT_PING_AGGRESSIVE_INTERVAL_SECONDS = 0.001
 MAX_ALLOWED_CLIENT_PACKETS_PER_BATCH = 999
 MAX_ALLOWED_CLIENT_ARQ_WINDOW_SIZE = 999999
 MAX_ALLOWED_CLIENT_ARQ_DATA_NACK_MAX_GAP = 999
-MIN_ALLOWED_CLIENT_COMPRESSION_MIN_SIZE = 999999
 MIN_ALLOWED_CLIENT_ARQ_INITIAL_RTO_SECONDS = 0.001
 `), 0o644); err != nil {
 		t.Fatalf("WriteFile config failed: %v", err)

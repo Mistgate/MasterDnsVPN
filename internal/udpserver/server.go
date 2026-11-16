@@ -12,14 +12,12 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"masterdnsvpn-go/internal/config"
 	dnsCache "masterdnsvpn-go/internal/dnscache"
-	DnsParser "masterdnsvpn-go/internal/dnsparser"
 	domainMatcher "masterdnsvpn-go/internal/domainmatcher"
 	fragmentStore "masterdnsvpn-go/internal/fragmentstore"
 	"masterdnsvpn-go/internal/logger"
@@ -55,18 +53,17 @@ type Server struct {
 	dnsResolveInflight      *dnsResolveInflightManager
 	dnsUpstreamServers      []string
 	dnsUpstreamBufferPool   sync.Pool
+	hooks                   atomic.Pointer[Hooks]
+	zone                    *zoneResponder
+	sourceBudget            *sourceBudget
+	tcpLimiter              *tcpLimiter
+	stats                   serverStats
+	requestRate             requestRate
 	dnsFragments            *fragmentStore.Store[dnsFragmentKey]
 	socks5Fragments         *fragmentStore.Store[socks5FragmentKey]
 	dnsFragmentTimeout      time.Duration
-	resolveDNSQueryFn       func([]byte) ([]byte, error)
-	dialStreamUpstreamFn    func(string, string, time.Duration) (net.Conn, error)
 	dropLogIntervalNanos    int64
 	socksConnectTimeout     time.Duration
-	useExternalSOCKS5       bool
-	externalSOCKS5Address   string
-	externalSOCKS5Auth      bool
-	externalSOCKS5User      []byte
-	externalSOCKS5Pass      []byte
 	streamOutboundTTL       time.Duration
 	streamOutboundMaxRetry  int
 	mtuProbePayloadPool     sync.Pool
@@ -88,9 +85,6 @@ type request struct {
 	size          int
 	addr          *net.UDPAddr
 	conn          *net.UDPConn
-	parsed        DnsParser.LitePacket
-	parseErr      error
-	hasParsedDNS  bool
 	fallbackEpoch *udpFallbackRouteEpoch
 }
 
@@ -143,19 +137,18 @@ func New(cfg config.ServerConfig, log *logger.Logger) *Server {
 		dnsFragmentTimeout: dnsFragmentTimeout,
 		dnsUpstreamBufferPool: sync.Pool{
 			New: func() any {
-				return make([]byte, 65535)
+				return make([]byte, dnsUpstreamBufferSize)
 			},
 		},
-		dialStreamUpstreamFn: func(network string, address string, timeout time.Duration) (net.Conn, error) {
-			return net.DialTimeout(network, address, timeout)
+		zone:         newZoneResponder(cfg.ZoneNSName, cfg.ZoneAddress, cfg.ZoneCheckKey),
+		sourceBudget: newSourceBudget(cfg.SourceBytesPerSecond),
+		tcpLimiter:   newTCPLimiter(),
+		requestRate: requestRate{
+			perSecond: float64(cfg.MaxRequestsPerSessionPerSecond),
+			burst:     float64(cfg.MaxRequestsPerSessionPerSecond) * 2,
 		},
-		dropLogIntervalNanos:  dropLogInterval.Nanoseconds(),
-		socksConnectTimeout:   socksConnectTimeout,
-		useExternalSOCKS5:     cfg.UseExternalSOCKS5,
-		externalSOCKS5Address: net.JoinHostPort(cfg.ForwardIP, strconv.Itoa(cfg.ForwardPort)),
-		externalSOCKS5Auth:    cfg.SOCKS5Auth,
-		externalSOCKS5User:    []byte(cfg.SOCKS5User),
-		externalSOCKS5Pass:    []byte(cfg.SOCKS5Pass),
+		dropLogIntervalNanos: dropLogInterval.Nanoseconds(),
+		socksConnectTimeout:  socksConnectTimeout,
 		mtuProbePayloadPool: sync.Pool{
 			New: func() any {
 				return make([]byte, mtuProbeMaxDownSize)
@@ -170,19 +163,19 @@ func New(cfg config.ServerConfig, log *logger.Logger) *Server {
 		},
 	}
 	sessions.streamCleanup = s.cleanupStreamArtifacts
+	// One session may have as many connects pending as it may have streams.
+	if s.deferredConnectSession != nil {
+		s.deferredConnectSession.sessionPendingCap = int32(clampInt(cfg.MaxAllowedClientActiveStreams, 8, 1024))
+	}
 	return s
 }
 
-// SetCredentialIndex atomically replaces the credential set used for new
-// handshakes and pre-session MTU probes.
-func (s *Server) SetCredentialIndex(index security.CredentialIndex) {
-	if s == nil || s.credentialIndex == nil {
-		return
-	}
-	s.credentialIndex.Set(index)
+func clampInt(value, low, high int) int {
+	return max(low, min(value, high))
 }
 
-// HandlePacket processes an incoming raw DNS query packet and returns the generated DNS response.
+// HandlePacket processes a raw DNS query packet without the size policy of
+// HandleQuery and returns the generated DNS response.
 func (s *Server) HandlePacket(packet []byte) []byte {
 	return s.handlePacket(packet)
 }
@@ -296,14 +289,37 @@ func splitDeferredSessionPools(totalWorkers int, totalQueue int) (dnsWorkers int
 	}
 
 	// DNS queries use a dedicated lightweight pool so connect-heavy work keeps
-	// the full user-configured deferred capacity.
+	// the full user-configured deferred capacity. A connect holds its worker
+	// until it succeeds, fails or times out, so there are many workers; the
+	// queue limit is the total and each worker gets its share.
 	dnsWorkers = 1
 	connectWorkers = totalWorkers
 
-	connectQueue = totalQueue
+	connectQueue = max(totalQueue/connectWorkers, 16)
 	dnsQueue = min(max(totalQueue/4, 64), 256)
 
 	return dnsWorkers, connectWorkers, dnsQueue, connectQueue
+}
+
+// Start runs the background work of the server and opens no socket: the
+// cleanup of expired sessions and the deferred workers that connect upstream
+// targets and resolve tunneled DNS. It stops with ctx. A host that owns its
+// sockets calls Start once and feeds HandleQuery.
+func (s *Server) Start(ctx context.Context) {
+	_ = s.startBackground(ctx)
+}
+
+// startBackground starts what Start documents and returns a channel that is
+// closed when the cleanup loop has ended.
+func (s *Server) startBackground(ctx context.Context) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.sessionCleanupLoop(ctx)
+	}()
+	s.deferredDNSSession.Start(ctx)
+	s.deferredConnectSession.Start(ctx)
+	return done
 }
 
 func (s *Server) Run(ctx context.Context) error {
@@ -377,16 +393,17 @@ func (s *Server) Run(ctx context.Context) error {
 
 	reqCh := make(chan request, s.cfg.EffectiveMaxConcurrentRequests())
 	var workerWG sync.WaitGroup
-	cleanupDone := make(chan struct{})
-
-	go func() {
-		defer close(cleanupDone)
-		s.sessionCleanupLoop(runCtx)
-	}()
-
-	s.deferredDNSSession.Start(runCtx)
-	s.deferredConnectSession.Start(runCtx)
+	cleanupDone := s.startBackground(runCtx)
 	s.startDNSWorkers(runCtx, conns[0], reqCh, &workerWG)
+
+	if s.cfg.TCPEnabled {
+		if tcpListener, err := net.Listen("tcp", s.cfg.Address()); err != nil {
+			s.log.Warnf("\U0001F4E1 <yellow>TCP Listener Failed, Addr: <cyan>%s</cyan>, Error: <cyan>%v</cyan>; answers too big for UDP cannot be retried over TCP</yellow>", s.cfg.Address(), err)
+		} else {
+			s.log.Infof("\U0001F4E1 <green>TCP Listener Ready, Addr: <cyan>%s</cyan></green>", tcpListener.Addr())
+			go func() { _ = s.ServeTCP(runCtx, tcpListener) }()
+		}
+	}
 
 	go func() {
 		<-runCtx.Done()

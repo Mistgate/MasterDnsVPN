@@ -8,6 +8,7 @@
 package config
 
 import (
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"net"
@@ -56,12 +57,15 @@ type ServerConfig struct {
 	StreamFailurePacketTTLSeconds   float64  `toml:"STREAM_FAILURE_PACKET_TTL_SECONDS"`
 	DNSCacheMaxRecords              int      `toml:"DNS_CACHE_MAX_RECORDS"`
 	DNSCacheTTLSeconds              float64  `toml:"DNS_CACHE_TTL_SECONDS"`
-	UseExternalSOCKS5               bool     `toml:"USE_EXTERNAL_SOCKS5"`
-	SOCKS5Auth                      bool     `toml:"SOCKS5_AUTH"`
-	SOCKS5User                      string   `toml:"SOCKS5_USER"`
-	SOCKS5Pass                      string   `toml:"SOCKS5_PASS"`
 	ForwardIP                       string   `toml:"FORWARD_IP"`
 	ForwardPort                     int      `toml:"FORWARD_PORT"`
+	ZoneNSName                      string   `toml:"ZONE_NS_NAME"`
+	ZoneAddress                     string   `toml:"ZONE_A_ADDRESS"`
+	ZoneCheckKey                    string   `toml:"ZONE_CHECK_KEY"`
+	TCPEnabled                      bool     `toml:"TCP_ENABLED"`
+	MaxSessionsPerCredential        int      `toml:"MAX_SESSIONS_PER_CREDENTIAL"`
+	MaxRequestsPerSessionPerSecond  int      `toml:"MAX_REQUESTS_PER_SESSION_PER_SECOND"`
+	SourceBytesPerSecond            int      `toml:"SOURCE_BYTES_PER_SECOND"`
 	Domain                          []string `toml:"DOMAIN"`
 	MinVPNLabelLength               int      `toml:"MIN_VPN_LABEL_LENGTH"`
 	DeviceCredential                string   `toml:"DEVICE_CREDENTIAL"`
@@ -117,11 +121,11 @@ func defaultServerConfig() ServerConfig {
 		FallbackAddress:                 "",
 		UDPReaders:                      4,
 		SocketBufferSize:                8 * 1024 * 1024,
-		MaxConcurrentRequests:           16384,
+		MaxConcurrentRequests:           1024,
 		DNSRequestWorkers:               8,
-		DeferredSessionWorkers:          4,
-		DeferredSessionQueueLimit:       4096,
-		MaxPacketSize:                   65535,
+		DeferredSessionWorkers:          64,
+		DeferredSessionQueueLimit:       1024,
+		MaxPacketSize:                   4096,
 		DropLogIntervalSecs:             2.0,
 		SessionTimeoutSecs:              300.0,
 		SessionCleanupIntervalSecs:      30.0,
@@ -135,24 +139,24 @@ func defaultServerConfig() ServerConfig {
 		DNSUpstreamServers:              []string{"1.1.1.1:53", "1.0.0.1:53"},
 		DNSUpstreamTimeoutSecs:          4.0,
 		DNSInflightWaitTimeoutSecs:      15.0,
-		SOCKSConnectTimeoutSecs:         120.0,
+		SOCKSConnectTimeoutSecs:         20.0,
 		DNSFragmentAssemblyTimeoutSecs:  300.0,
 		StreamSetupAckTTLSeconds:        400.0,
 		StreamResultPacketTTLSeconds:    300.0,
 		StreamFailurePacketTTLSeconds:   120.0,
-		DNSCacheMaxRecords:              50000,
+		DNSCacheMaxRecords:              4096,
 		DNSCacheTTLSeconds:              300.0,
-		UseExternalSOCKS5:               false,
-		SOCKS5Auth:                      false,
-		SOCKS5User:                      "admin",
-		SOCKS5Pass:                      "123456",
 		ForwardIP:                       "",
 		ForwardPort:                     1080,
+		TCPEnabled:                      true,
+		MaxSessionsPerCredential:        2,
+		MaxRequestsPerSessionPerSecond:  2000,
+		SourceBytesPerSecond:            4 << 20,
 		Domain:                          nil,
 		MinVPNLabelLength:               3,
 		DeviceCredential:                "",
 		LogLevel:                        "INFO",
-		ARQWindowSize:                   800,
+		ARQWindowSize:                   512,
 		ARQInitialRTOSeconds:            1.0,
 		ARQMaxRTOSeconds:                5.0,
 		ARQControlInitialRTOSeconds:     0.5,
@@ -167,8 +171,8 @@ func defaultServerConfig() ServerConfig {
 		ARQDataNackRepeatSeconds:        1.0,
 		ARQTerminalDrainTimeoutSec:      120.0,
 		ARQTerminalAckWaitTimeoutSec:    90.0,
-		MaxAllowedClientActiveSessions:  255,
-		MaxAllowedClientActiveStreams:   2000,
+		MaxAllowedClientActiveSessions:  64,
+		MaxAllowedClientActiveStreams:   64,
 		ClientMaxPacketDuplicationCount: 5,
 		ClientMaxSetupDuplicationCount:  6,
 		ClientMaxUploadMTU:              150,
@@ -176,7 +180,7 @@ func defaultServerConfig() ServerConfig {
 		ClientMaxRxTxWorkers:            255,
 		ClientMinPingAggressiveInterval: 0.05,
 		ClientMaxPacketsPerBatch:        20,
-		ClientMaxARQWindowSize:          8000,
+		ClientMaxARQWindowSize:          512,
 		ClientMaxARQDataNackMaxGap:      255,
 		ClientMinARQInitialRTOSeconds:   0.05,
 	}
@@ -265,6 +269,12 @@ func LoadServerConfigFromJSONBase64WithOverrides(encoded string, overrides Serve
 	return finalizeServerConfig(cfg)
 }
 
+// FinalizeServerConfig validates and completes a ServerConfig that was built in
+// code the way a loaded configuration file is.
+func FinalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
+	return finalizeServerConfig(cfg)
+}
+
 func finalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	cfg.ProtocolType = defaultString(strings.ToUpper(strings.TrimSpace(cfg.ProtocolType)), "SOCKS5")
 
@@ -316,14 +326,14 @@ func finalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	}
 
 	if cfg.MaxConcurrentRequests <= 0 {
-		cfg.MaxConcurrentRequests = 4096
+		cfg.MaxConcurrentRequests = defaultServerConfig().MaxConcurrentRequests
 	}
 
 	if cfg.DNSRequestWorkers <= 0 {
 		cfg.DNSRequestWorkers = defaultServerConfig().DNSRequestWorkers
 	}
-	if cfg.DeferredSessionWorkers < 0 {
-		cfg.DeferredSessionWorkers = 0
+	if cfg.DeferredSessionWorkers < 1 {
+		cfg.DeferredSessionWorkers = defaultServerConfig().DeferredSessionWorkers
 	}
 
 	if cfg.DeferredSessionWorkers > 128 {
@@ -331,16 +341,14 @@ func finalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	}
 
 	if cfg.DeferredSessionQueueLimit < 1 {
-		cfg.DeferredSessionQueueLimit = 256
+		cfg.DeferredSessionQueueLimit = defaultServerConfig().DeferredSessionQueueLimit
 	}
 
 	if cfg.DeferredSessionQueueLimit > 14336 {
 		cfg.DeferredSessionQueueLimit = 14336
 	}
 
-	if cfg.MaxPacketSize <= 0 {
-		cfg.MaxPacketSize = 65535
-	}
+	cfg.MaxPacketSize = clampInt(defaultIntBelow(cfg.MaxPacketSize, 1, 4096), 512, 65535)
 
 	if cfg.DropLogIntervalSecs <= 0 {
 		cfg.DropLogIntervalSecs = 2.0
@@ -384,9 +392,7 @@ func finalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	}
 	cfg.DNSInflightWaitTimeoutSecs = clampFloat(defaultFloatAtMostZero(cfg.DNSInflightWaitTimeoutSecs, 15.0), 0.1, 120.0)
 
-	if cfg.SOCKSConnectTimeoutSecs <= 0 {
-		cfg.SOCKSConnectTimeoutSecs = 120.0
-	}
+	cfg.SOCKSConnectTimeoutSecs = clampFloat(defaultFloatAtMostZero(cfg.SOCKSConnectTimeoutSecs, 20.0), 1.0, 120.0)
 
 	if cfg.DNSFragmentAssemblyTimeoutSecs <= 0 {
 		cfg.DNSFragmentAssemblyTimeoutSecs = 300.0
@@ -397,7 +403,7 @@ func finalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	cfg.StreamFailurePacketTTLSeconds = clampFloat(defaultFloatAtMostZero(cfg.StreamFailurePacketTTLSeconds, 120.0), 1.0, 86400.0)
 
 	if cfg.DNSCacheMaxRecords < 1 {
-		cfg.DNSCacheMaxRecords = 50000
+		cfg.DNSCacheMaxRecords = 4096
 	}
 
 	if cfg.DNSCacheTTLSeconds <= 0 {
@@ -408,26 +414,24 @@ func finalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 		return cfg, fmt.Errorf("invalid FORWARD_PORT: %d", cfg.ForwardPort)
 	}
 
-	if len(cfg.SOCKS5User) > 255 {
-		return cfg, fmt.Errorf("SOCKS5_USER cannot exceed 255 bytes")
-	}
-
-	if len(cfg.SOCKS5Pass) > 255 {
-		return cfg, fmt.Errorf("SOCKS5_PASS cannot exceed 255 bytes")
-	}
-
-	if cfg.SOCKS5Auth && (cfg.SOCKS5User == "" || cfg.SOCKS5Pass == "") {
-		return cfg, fmt.Errorf("SOCKS5_AUTH requires both SOCKS5_USER and SOCKS5_PASS")
-	}
-
-	if cfg.UseExternalSOCKS5 {
-		if cfg.ForwardIP == "" {
-			return cfg, fmt.Errorf("USE_EXTERNAL_SOCKS5 requires FORWARD_IP")
-		}
-		if cfg.ForwardPort <= 0 {
-			return cfg, fmt.Errorf("USE_EXTERNAL_SOCKS5 requires a valid FORWARD_PORT")
+	cfg.ZoneNSName = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(cfg.ZoneNSName), "."))
+	cfg.ZoneAddress = strings.TrimSpace(cfg.ZoneAddress)
+	if cfg.ZoneAddress != "" {
+		ip := net.ParseIP(cfg.ZoneAddress)
+		if ip == nil || ip.To4() == nil {
+			return cfg, fmt.Errorf("invalid ZONE_A_ADDRESS %q: must be an IPv4 literal", cfg.ZoneAddress)
 		}
 	}
+	cfg.ZoneCheckKey = strings.TrimSpace(cfg.ZoneCheckKey)
+	if cfg.ZoneCheckKey != "" {
+		key, err := hex.DecodeString(cfg.ZoneCheckKey)
+		if err != nil || len(key) < 16 {
+			return cfg, fmt.Errorf("invalid ZONE_CHECK_KEY: must be at least 32 hex characters")
+		}
+	}
+	cfg.MaxSessionsPerCredential = clampInt(defaultIntBelow(cfg.MaxSessionsPerCredential, 1, 2), 1, 255)
+	cfg.MaxRequestsPerSessionPerSecond = clampInt(defaultIntBelow(cfg.MaxRequestsPerSessionPerSecond, 1, 2000), 1, 1000000)
+	cfg.SourceBytesPerSecond = clampInt(defaultIntBelow(cfg.SourceBytesPerSecond, 1, 4<<20), 1<<16, 1<<30)
 
 	if cfg.MinVPNLabelLength <= 0 {
 		cfg.MinVPNLabelLength = 3
@@ -439,7 +443,7 @@ func finalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 		cfg.LogLevel = "INFO"
 	}
 
-	cfg.ARQWindowSize = clampInt(defaultIntBelow(cfg.ARQWindowSize, 1, 800), 1, 8000)
+	cfg.ARQWindowSize = clampInt(defaultIntBelow(cfg.ARQWindowSize, 1, 512), 1, 8000)
 	cfg.ARQInitialRTOSeconds = clampFloat(defaultFloatAtMostZero(cfg.ARQInitialRTOSeconds, 0.5), 0.01, 60.0)
 	cfg.ARQMaxRTOSeconds = clampFloat(defaultFloatAtMostZero(cfg.ARQMaxRTOSeconds, 3.0), cfg.ARQInitialRTOSeconds, 120.0)
 	cfg.ARQControlInitialRTOSeconds = clampFloat(defaultFloatAtMostZero(cfg.ARQControlInitialRTOSeconds, 0.5), 0.01, 60.0)
@@ -562,22 +566,23 @@ func (c ServerConfig) EffectiveDNSRequestWorkers() int {
 	return clampInt(max(c.DNSRequestWorkers, recommended), 1, 256)
 }
 
+// EffectiveDeferredSessionWorkers is the number of workers that connect
+// upstream targets. Each connect blocks its worker until it succeeds, fails or
+// times out, so the pool is sized for concurrent connects, not for CPUs.
 func (c ServerConfig) EffectiveDeferredSessionWorkers() int {
-	recommended := min(max(runtime.NumCPU()/2, 2), 16)
-	if c.ProtocolType == "SOCKS5" && recommended < 4 {
-		recommended = 4
-	}
-	return clampInt(max(c.DeferredSessionWorkers, recommended), 0, 256)
+	return clampInt(defaultIntBelow(c.DeferredSessionWorkers, 1, 64), 1, 256)
 }
 
+// EffectiveDeferredSessionQueueLimit is the total number of queued deferred
+// tasks; the pool divides it among its workers.
 func (c ServerConfig) EffectiveDeferredSessionQueueLimit() int {
-	recommended := clampInt(max(c.EffectiveDeferredSessionWorkers()*512, c.EffectiveMaxPacketsPerBatch()*128), 256, 16384)
-	return clampInt(max(c.DeferredSessionQueueLimit, recommended), 256, 32768)
+	return clampInt(defaultIntBelow(c.DeferredSessionQueueLimit, 64, 1024), 64, 32768)
 }
 
+// EffectiveMaxConcurrentRequests is the length of the request queue. The
+// configured value is authoritative: every queued request holds a read buffer.
 func (c ServerConfig) EffectiveMaxConcurrentRequests() int {
-	recommended := max(c.EffectiveUDPReaders()*c.EffectiveDNSRequestWorkers()*512, 4096)
-	return clampInt(max(c.MaxConcurrentRequests, recommended), 1024, 131072)
+	return clampInt(defaultIntBelow(c.MaxConcurrentRequests, 64, 1024), 64, 131072)
 }
 
 func (c ServerConfig) EffectiveMaxPacketsPerBatch() int {
@@ -594,8 +599,7 @@ func (c ServerConfig) EffectiveMaxPacketsPerBatch() int {
 }
 
 func (c ServerConfig) EffectiveDNSCacheMaxRecords() int {
-	recommended := clampInt(max(c.EffectiveMaxConcurrentRequests()*2, 2000), 2000, 200000)
-	return clampInt(max(c.DNSCacheMaxRecords, recommended), 1, 500000)
+	return clampInt(defaultIntBelow(c.DNSCacheMaxRecords, 1, 4096), 1, 500000)
 }
 
 func (c ServerConfig) EffectiveSessionOrphanQueueInitialCap() int {

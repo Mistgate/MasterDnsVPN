@@ -86,7 +86,11 @@ func buildResponseWithRCode(request []byte, rcode uint8) ([]byte, error) {
 		questionCount = header.QDCount
 	}
 
-	optStart, optLen := findOPTRecordRange(request, header, questionEndOffset)
+	_, requestOPTLen := findOPTRecordRange(request, header, questionEndOffset)
+	optLen := 0
+	if requestOPTLen > 0 {
+		optLen = len(ownOPT)
+	}
 
 	response := make([]byte, dnsHeaderSize+questionLen+optLen)
 	binary.BigEndian.PutUint16(response[0:2], header.ID)
@@ -99,7 +103,7 @@ func buildResponseWithRCode(request []byte, rcode uint8) ([]byte, error) {
 		copy(response[dnsHeaderSize:], request[dnsHeaderSize:questionEndOffset])
 	}
 	if optLen > 0 {
-		copy(response[dnsHeaderSize+questionLen:], request[optStart:optStart+optLen])
+		copy(response[dnsHeaderSize+questionLen:], ownOPT)
 	}
 
 	return response, nil
@@ -121,7 +125,11 @@ func buildResponseWithFlagsLite(request []byte, parsed LitePacket, flags uint16)
 		return nil, ErrNotDNSRequest
 	}
 
-	optStart, optLen := findOPTRecordRange(request, parsed.Header, parsed.QuestionEndOffset)
+	_, requestOPTLen := findOPTRecordRange(request, parsed.Header, parsed.QuestionEndOffset)
+	optLen := 0
+	if requestOPTLen > 0 {
+		optLen = len(ownOPT)
+	}
 
 	questionLen := 0
 	if parsed.QuestionEndOffset >= dnsHeaderSize && parsed.QuestionEndOffset <= len(request) {
@@ -138,7 +146,7 @@ func buildResponseWithFlagsLite(request []byte, parsed LitePacket, flags uint16)
 		copy(response[dnsHeaderSize:], request[dnsHeaderSize:parsed.QuestionEndOffset])
 	}
 	if optLen > 0 {
-		copy(response[dnsHeaderSize+questionLen:], request[optStart:optStart+optLen])
+		copy(response[dnsHeaderSize+questionLen:], ownOPT)
 	}
 
 	return response, nil
@@ -184,52 +192,34 @@ func isLikelyDNSMessageHeader(header Header) bool {
 	return true
 }
 
+const (
+	flagQR     uint16 = 1 << 15
+	flagAA     uint16 = 1 << 10
+	flagTC     uint16 = 1 << 9
+	flagRD     uint16 = 1 << 8
+	flagCD     uint16 = 1 << 4
+	opcodeMask uint16 = 0x7800
+)
+
+// buildResponseFlags builds the flags of a non-authoritative negative answer:
+// QR, the request opcode, RD and CD copied, RA clear (this is not a recursive
+// resolver), AA and TC clear.
 func buildResponseFlags(requestFlags uint16, rcode uint8) uint16 {
-	const (
-		flagQR     uint16 = 1 << 15
-		flagAA     uint16 = 1 << 10
-		flagTC     uint16 = 1 << 9
-		flagRD     uint16 = 1 << 8
-		flagRA     uint16 = 1 << 7
-		flagCD     uint16 = 1 << 4
-		opcodeMask uint16 = 0x7800
-	)
-
-	flags := flagQR | flagRA | (requestFlags & opcodeMask) | uint16(rcode&0x0F)
-	if requestFlags&flagRD != 0 {
-		flags |= flagRD
-	}
-	if requestFlags&flagCD != 0 {
-		flags |= flagCD
-	}
-
-	// Resolver-generated local answers should look recursive, not authoritative.
-	// AA/TC are intentionally cleared unless we are relaying an upstream answer
-	// verbatim, in which case those bits come from the upstream packet itself.
-	flags &^= flagAA | flagTC
-	return flags
+	return responseFlags(requestFlags, rcode, false, false)
 }
 
 func buildAuthoritativeResponseFlags(requestFlags uint16, rcode uint8) uint16 {
-	const (
-		flagQR     uint16 = 1 << 15
-		flagAA     uint16 = 1 << 10
-		flagTC     uint16 = 1 << 9
-		flagRD     uint16 = 1 << 8
-		flagRA     uint16 = 1 << 7
-		flagCD     uint16 = 1 << 4
-		opcodeMask uint16 = 0x7800
-	)
+	return responseFlags(requestFlags, rcode, true, false)
+}
 
-	flags := flagQR | flagAA | (requestFlags & opcodeMask) | uint16(rcode&0x0F)
-	if requestFlags&flagRD != 0 {
-		flags |= flagRD
+func responseFlags(requestFlags uint16, rcode uint8, authoritative bool, truncated bool) uint16 {
+	flags := flagQR | (requestFlags & opcodeMask) | uint16(rcode&0x0F) | (requestFlags & (flagRD | flagCD))
+	if authoritative {
+		flags |= flagAA
 	}
-	if requestFlags&flagCD != 0 {
-		flags |= flagCD
+	if truncated {
+		flags |= flagTC
 	}
-
-	flags &^= flagRA | flagTC
 	return flags
 }
 

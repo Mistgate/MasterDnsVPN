@@ -13,8 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
-	"sync/atomic"
 
 	baseCodec "masterdnsvpn-go/internal/basecodec"
 	Enums "masterdnsvpn-go/internal/enums"
@@ -190,72 +188,27 @@ func buildTXTQuestionPacketPrepared(qname []byte, qType uint16, ednsUDPSize uint
 	return packet
 }
 
-func BuildTXTResponsePacket(questionPacket []byte, answerName string, answerPayloads [][]byte) ([]byte, error) {
-	if len(answerPayloads) == 1 {
-		return buildSingleTXTResponsePacket(questionPacket, answerName, answerPayloads[0])
-	}
-
-	if len(questionPacket) < dnsHeaderSize {
-		return nil, ErrPacketTooShort
-	}
-
-	header := parseHeader(questionPacket)
-	questionBytes, questionCount, questionEndOffset := extractQuestionSection(questionPacket, header)
-	optStart, optLen := findOPTRecordRange(questionPacket, header, questionEndOffset)
-
-	nameBytes, err := responseAnswerNameBytes(questionPacket, answerName)
+// BuildTXTResponsePacket answers a question with one TXT record per payload.
+func BuildTXTResponsePacket(questionPacket []byte, answerPayloads [][]byte) ([]byte, error) {
+	parsed, err := ParseDNSRequestLite(questionPacket)
 	if err != nil {
 		return nil, err
 	}
+	return buildTXTResponse(questionPacket, parsed, answerPayloads)
+}
 
-	answerLen := 0
-	useAnswerNameCompression := len(answerPayloads) > 1
+func buildTXTResponse(questionPacket []byte, parsed LitePacket, answerPayloads [][]byte) ([]byte, error) {
+	records := make([]Record, len(answerPayloads))
 	for i, payload := range answerPayloads {
-		nameLen := len(nameBytes)
-		if useAnswerNameCompression && i > 0 {
-			nameLen = 2
-		}
-		answerLen += nameLen + 10 + len(payload)
+		records[i] = Record{Type: Enums.DNS_RECORD_TYPE_TXT, Data: payload}
 	}
-
-	response := make([]byte, dnsHeaderSize+len(questionBytes)+answerLen+optLen)
-	binary.BigEndian.PutUint16(response[0:2], header.ID)
-	binary.BigEndian.PutUint16(response[2:4], buildResponseFlags(header.Flags, Enums.DNSR_CODE_NO_ERROR))
-	binary.BigEndian.PutUint16(response[4:6], questionCount)
-	binary.BigEndian.PutUint16(response[6:8], uint16(len(answerPayloads)))
-	binary.BigEndian.PutUint16(response[8:10], 0)
-	binary.BigEndian.PutUint16(response[10:12], uint16(getARCount(optLen)))
-
-	offset := dnsHeaderSize
-	offset += copy(response[offset:], questionBytes)
-	firstAnswerNameOffset := offset
-
-	for i, payload := range answerPayloads {
-		if useAnswerNameCompression && i > 0 && firstAnswerNameOffset <= 0x3FFF {
-			binary.BigEndian.PutUint16(response[offset:offset+2], uint16(0xC000|firstAnswerNameOffset))
-			offset += 2
-		} else {
-			offset += copy(response[offset:], nameBytes)
-		}
-		binary.BigEndian.PutUint16(response[offset:offset+2], Enums.DNS_RECORD_TYPE_TXT)
-		binary.BigEndian.PutUint16(response[offset+2:offset+4], Enums.DNSQ_CLASS_IN)
-		binary.BigEndian.PutUint32(response[offset+4:offset+8], 0)
-		binary.BigEndian.PutUint16(response[offset+8:offset+10], uint16(len(payload)))
-		offset += 10
-		offset += copy(response[offset:], payload)
-	}
-
-	if optLen > 0 {
-		copy(response[offset:], questionPacket[optStart:optStart+optLen])
-	}
-
-	return response, nil
+	return BuildResponse(questionPacket, parsed, Response{Authoritative: true, Answers: records})
 }
 
 // BuildVPNResponsePacket frames a clear inner packet. The server never calls it:
 // every production answer is a sealed frame passed to BuildVPNResponsePayload.
 // It remains for tests of the TXT chunking.
-func BuildVPNResponsePacket(questionPacket []byte, answerName string, packet VpnProto.Packet, baseEncode bool) ([]byte, error) {
+func BuildVPNResponsePacket(questionPacket []byte, packet VpnProto.Packet, baseEncode bool) ([]byte, error) {
 	rawFrame, err := VpnProto.BuildRaw(VpnProto.BuildOptions{
 		SessionID:      packet.SessionID,
 		PacketType:     packet.PacketType,
@@ -265,99 +218,36 @@ func BuildVPNResponsePacket(questionPacket []byte, answerName string, packet Vpn
 		TotalFragments: packet.TotalFragments,
 		Payload:        packet.Payload,
 	})
-
 	if err != nil {
 		return nil, err
 	}
-	return BuildVPNResponsePayload(questionPacket, answerName, rawFrame, baseEncode)
+	return BuildVPNResponsePayload(questionPacket, rawFrame, baseEncode)
 }
 
-func BuildVPNResponsePayload(questionPacket []byte, answerName string, rawFrame []byte, baseEncode bool) ([]byte, error) {
-	maxChunk := maxTXTAnswerPayload
-	if baseEncode {
-		maxChunk = maxTXTEncodedChunk
+// BuildVPNResponsePayload answers a tunnel question with a sealed frame in TXT
+// records. The owner of every record is a compression pointer to the question,
+// the answer is authoritative, RA is clear and the only OPT record is our own.
+func BuildVPNResponsePayload(questionPacket []byte, rawFrame []byte, baseEncode bool) ([]byte, error) {
+	parsed, err := ParseDNSRequestLite(questionPacket)
+	if err != nil {
+		return nil, err
 	}
-	if len(rawFrame) <= maxChunk {
-		return buildSingleTXTResponsePacket(questionPacket, answerName, buildTXTAnswerChunk(rawFrame, baseEncode))
-	}
+	return BuildVPNResponseFromLite(questionPacket, parsed, rawFrame, baseEncode)
+}
 
+// BuildVPNResponseFromLite is BuildVPNResponsePayload for a request that is
+// already parsed.
+func BuildVPNResponseFromLite(questionPacket []byte, parsed LitePacket, rawFrame []byte, baseEncode bool) ([]byte, error) {
 	answerPayloads, err := buildTXTAnswerChunks(rawFrame, baseEncode)
 	if err != nil {
 		return nil, err
 	}
-
-	return BuildTXTResponsePacket(questionPacket, answerName, answerPayloads)
+	return buildTXTResponse(questionPacket, parsed, answerPayloads)
 }
 
-func buildSingleTXTResponsePacket(questionPacket []byte, answerName string, answerPayload []byte) ([]byte, error) {
-	if len(questionPacket) < dnsHeaderSize {
-		return nil, ErrPacketTooShort
-	}
-
-	header := parseHeader(questionPacket)
-	questionBytes, questionCount, questionEndOffset := extractQuestionSection(questionPacket, header)
-	optStart, optLen := findOPTRecordRange(questionPacket, header, questionEndOffset)
-
-	nameBytes, err := responseAnswerNameBytes(questionPacket, answerName)
-	if err != nil {
-		return nil, err
-	}
-
-	response := make([]byte, dnsHeaderSize+len(questionBytes)+len(nameBytes)+10+len(answerPayload)+optLen)
-	binary.BigEndian.PutUint16(response[0:2], header.ID)
-	binary.BigEndian.PutUint16(response[2:4], buildResponseFlags(header.Flags, Enums.DNSR_CODE_NO_ERROR))
-	binary.BigEndian.PutUint16(response[4:6], questionCount)
-	binary.BigEndian.PutUint16(response[6:8], 1)
-	binary.BigEndian.PutUint16(response[8:10], 0)
-	binary.BigEndian.PutUint16(response[10:12], uint16(getARCount(optLen)))
-
-	offset := dnsHeaderSize
-	offset += copy(response[offset:], questionBytes)
-	offset += copy(response[offset:], nameBytes)
-	binary.BigEndian.PutUint16(response[offset:offset+2], Enums.DNS_RECORD_TYPE_TXT)
-	binary.BigEndian.PutUint16(response[offset+2:offset+4], Enums.DNSQ_CLASS_IN)
-	binary.BigEndian.PutUint32(response[offset+4:offset+8], 0)
-	binary.BigEndian.PutUint16(response[offset+8:offset+10], uint16(len(answerPayload)))
-	offset += 10
-	offset += copy(response[offset:], answerPayload)
-
-	if optLen > 0 {
-		copy(response[offset:], questionPacket[optStart:optStart+optLen])
-	}
-
-	return response, nil
-}
-
-func responseAnswerNameBytes(questionPacket []byte, answerName string) ([]byte, error) {
-	rawName, parsedName, ok := extractFirstQuestionNameWire(questionPacket)
-	if ok && sameDNSName(parsedName, answerName) {
-		return rawName, nil
-	}
-	return encodeDNSNameStrict(answerName)
-}
-
-func extractFirstQuestionNameWire(packet []byte) ([]byte, string, bool) {
-	if len(packet) < dnsHeaderSize {
-		return nil, "", false
-	}
-	header := parseHeader(packet)
-	if header.QDCount == 0 {
-		return nil, "", false
-	}
-
-	name, nextOffset, err := parseName(packet, dnsHeaderSize)
-	if err != nil || nextOffset <= dnsHeaderSize || nextOffset > len(packet) {
-		return nil, "", false
-	}
-
-	return packet[dnsHeaderSize:nextOffset], name, true
-}
-
-func sameDNSName(a string, b string) bool {
-	a = strings.TrimSuffix(a, ".")
-	b = strings.TrimSuffix(b, ".")
-	return strings.EqualFold(a, b)
-}
+// VPNResponseOverhead is the number of bytes a one-record TXT answer adds to a
+// question: the compressed owner, the record header and the string length.
+const VPNResponseOverhead = 2 + 10 + 1
 
 // ExtractVPNResponse parses a clear inner packet from a response; production
 // code reads answers with ExtractVPNResponsePayload and then authenticates them.
@@ -787,17 +677,14 @@ func encodedQNameLen(encodedChars int, domainLen int) int {
 	return encodedChars + labelSplits + 1 + domainLen
 }
 
-var dnsIDCounter atomic.Uint32
-var dnsIDInit sync.Once
-
+// nextDNSRequestID returns an unpredictable DNS message ID: a resolver and an
+// on-path observer must not be able to guess the ID of the next query.
 func nextDNSRequestID() uint16 {
-	dnsIDInit.Do(func() {
-		var seed [4]byte
-		if _, err := rand.Read(seed[:]); err == nil {
-			dnsIDCounter.Store(uint32(binary.BigEndian.Uint32(seed[:])))
-		}
-	})
-	return uint16(dnsIDCounter.Add(1))
+	var id [2]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		panic("crypto/rand failed: " + err.Error())
+	}
+	return binary.BigEndian.Uint16(id[:])
 }
 
 func min(a, b int) int {

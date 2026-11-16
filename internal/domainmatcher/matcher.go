@@ -19,8 +19,14 @@ type Action uint8
 
 const (
 	ActionFormatError Action = iota
+	// ActionNoData is a name inside a served zone that is not a tunnel query:
+	// the zone apex, an intermediate name or a record type the tunnel does not
+	// use. The zone responder decides what to answer.
 	ActionNoData
 	ActionProcess
+	// ActionRefused is a name outside every served zone (or a class other than
+	// IN): the answer is REFUSED, never an authoritative statement about it.
+	ActionRefused
 )
 
 type Decision struct {
@@ -79,10 +85,14 @@ func (m *Matcher) Match(parsed DnsParser.LitePacket) Decision {
 	}
 
 	baseDomain, labels, matched := findAllowedDomain(requestName, m.root)
-	if !matched {
+	if !matched || q0.Class != Enums.DNSQ_CLASS_IN {
+		reason := "unauthorized-domain"
+		if matched {
+			reason = "unsupported-class"
+		}
 		return Decision{
-			Action:       ActionNoData,
-			Reason:       "unauthorized-domain",
+			Action:       ActionRefused,
+			Reason:       reason,
 			Question:     q0,
 			RequestName:  requestName,
 			QuestionType: q0.Type,
@@ -96,6 +106,7 @@ func (m *Matcher) Match(parsed DnsParser.LitePacket) Decision {
 			Question:     q0,
 			RequestName:  requestName,
 			BaseDomain:   baseDomain,
+			Labels:       labels,
 			QuestionType: q0.Type,
 		}
 	}

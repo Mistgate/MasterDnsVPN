@@ -1,10 +1,3 @@
-// ==============================================================================
-// MasterDnsVPN
-// Author: MasterkinG32
-// Github: https://github.com/masterking32
-// Year: 2026
-// ==============================================================================
-
 package udpserver
 
 import (
@@ -14,7 +7,13 @@ import (
 	domainMatcher "masterdnsvpn-go/internal/domainmatcher"
 )
 
+// handlePacket answers a packet without the size policy of HandleQuery. It is
+// the entry point of the in-package tests.
 func (s *Server) handlePacket(packet []byte) []byte {
+	return s.handlePacketCtx(&queryContext{}, packet)
+}
+
+func (s *Server) handlePacketCtx(qc *queryContext, packet []byte) []byte {
 	parsed, err := DnsParser.ParseDNSRequestLite(packet)
 	if err != nil {
 		if errors.Is(err, DnsParser.ErrNotDNSRequest) || errors.Is(err, DnsParser.ErrPacketTooShort) {
@@ -23,39 +22,57 @@ func (s *Server) handlePacket(packet []byte) []byte {
 
 		return s.buildNoDataResponseLogged(packet, "request-parse-failed")
 	}
+	qc.parsed = parsed
+	qc.hasParsed = true
 
-	return s.handleParsedPacket(packet, parsed, nil)
+	return s.handleParsedPacket(qc, packet, parsed)
 }
 
-func (s *Server) handleParsedPacket(packet []byte, parsed DnsParser.LitePacket, err error) []byte {
-	if err != nil || parsed.Header.QR != 0 {
+func (s *Server) handleParsedPacket(qc *queryContext, packet []byte, parsed DnsParser.LitePacket) []byte {
+	if parsed.Header.QR != 0 {
 		return nil
 	}
 
-	if !parsed.HasQuestion {
-		return s.buildNoDataResponseLogged(packet, "request-has-no-question")
+	if !parsed.HasQuestion || len(parsed.Questions) != 1 {
+		return s.buildFormatErrorResponseLiteLogged(packet, parsed, "request-question-count")
+	}
+	if parsed.Header.OpCode != 0 {
+		response, err := DnsParser.BuildNotImplementedResponseFromLite(packet, parsed)
+		if err != nil {
+			return nil
+		}
+		return response
 	}
 
 	decision := s.domainMatcher.Match(parsed)
 	switch decision.Action {
 	case domainMatcher.ActionProcess:
-		response := s.handleTunnelCandidate(packet, parsed, decision)
+		if isDelegationCheckName(decision.RequestName, decision.BaseDomain) {
+			return s.answerZone(qc, packet, parsed, decision)
+		}
+		qc.inZone = true
+		response := s.handleTunnelCandidate(qc, packet, parsed, decision)
 		if response != nil {
 			return response
 		}
 
-		return s.buildNoDataResponseLiteLogged(packet, parsed, "domain-match-process-failed")
+		return s.buildInZoneNoData(packet, parsed)
 	case domainMatcher.ActionFormatError:
 		return s.buildFormatErrorResponseLiteLogged(packet, parsed, decision.Reason)
-	case domainMatcher.ActionNoData:
-		if decision.Reason == "unauthorized-domain" {
-			return s.buildNameErrorResponseLiteLogged(packet, parsed, decision.Reason)
+	case domainMatcher.ActionRefused:
+		s.stats.refused.Add(1)
+		response, err := DnsParser.BuildRefusedResponseFromLite(packet, parsed)
+		if err != nil {
+			return nil
 		}
-		return s.buildNoDataResponseLiteLogged(packet, parsed, decision.Reason)
+		return response
+	case domainMatcher.ActionNoData:
+		return s.answerZone(qc, packet, parsed, decision)
 	default:
 		return s.buildNoDataResponseLiteLogged(packet, parsed, "domain-match-unknown-action")
 	}
 }
-func (s *Server) handleTunnelCandidate(packet []byte, parsed DnsParser.LitePacket, decision domainMatcher.Decision) []byte {
-	return s.handleSecureTunnelCandidate(packet, parsed, decision)
+
+func (s *Server) handleTunnelCandidate(qc *queryContext, packet []byte, parsed DnsParser.LitePacket, decision domainMatcher.Decision) []byte {
+	return s.handleSecureTunnelCandidate(qc, packet, parsed, decision)
 }

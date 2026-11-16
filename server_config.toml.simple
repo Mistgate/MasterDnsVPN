@@ -43,17 +43,28 @@ UDP_PORT = 53
 # not resolve back to this listener. Fallback uses one ordered ingress reader.
 # FALLBACK = "127.0.0.1:5353"
 
-# UDP readers, DNS workers, and front-door request queue are smart-sized
-# internally. Only override them if you are profiling a specific host.
+# Also serve DNS over TCP on the same address and port. A resolver repeats over
+# TCP every answer that did not fit a UDP datagram (they come back with TC=1),
+# so keep this on.
+TCP_ENABLED = true
+
+# UDP readers and DNS workers are smart-sized internally. The request queue is
+# exactly what is configured: each queued request holds one MAX_PACKET_SIZE buffer.
 UDP_READERS = 6
 DNS_REQUEST_WORKERS = 10
-MAX_CONCURRENT_REQUESTS = 32768
+MAX_CONCURRENT_REQUESTS = 1024
 
 # UDP socket read/write buffer size in bytes.
 SOCKET_BUFFER_SIZE = 8388608
 
-# Maximum packet buffer size allocated by the server packet pool.
-MAX_PACKET_SIZE = 65535
+# Maximum packet buffer size allocated by the server packet pool. DNS queries
+# are far shorter than this.
+MAX_PACKET_SIZE = 4096
+
+# Most UDP answer bytes per second sent to one /24 network (/56 for IPv6). Past
+# it, answers become empty TC=1 answers that are no longer than the query, so a
+# spoofed source cannot use this server to flood a victim.
+SOURCE_BYTES_PER_SECOND = 4194304
 
 # Minimum interval between overload/drop logs.
 DROP_LOG_INTERVAL_SECONDS = 2.0
@@ -65,10 +76,11 @@ DROP_LOG_INTERVAL_SECONDS = 2.0
 # - Controls initial queue capacities used inside session runtime structures.
 # ------------------------------------------------------------------------------
 
-# Deferred-session workers and queue depth are also smart-sized internally.
-# Override them only if you are tuning a specific production host.
-DEFERRED_SESSION_WORKERS = 6
-DEFERRED_SESSION_QUEUE_LIMIT = 8192
+# Every connect to a target holds one worker until it succeeds, fails or times
+# out, so there are many workers: a few targets that never answer do not delay
+# the connects that follow. The queue limit is the total, shared by the workers.
+DEFERRED_SESSION_WORKERS = 64
+DEFERRED_SESSION_QUEUE_LIMIT = 1024
 
 # Initial queue / store capacities are now derived automatically by the server
 # from workers, ARQ window, and batching pressure.
@@ -126,48 +138,45 @@ DNS_INFLIGHT_WAIT_TIMEOUT_SECONDS = 15.0
 # Fragment assembly timeout for inbound DNS query fragments.
 DNS_FRAGMENT_ASSEMBLY_TIMEOUT = 300.0
 
-# In-memory tunnel DNS cache size is auto-raised internally when needed.
-DNS_CACHE_MAX_RECORDS = 50000
+# In-memory tunnel DNS cache.
+DNS_CACHE_MAX_RECORDS = 4096
 DNS_CACHE_TTL_SECONDS = 300.0
 
 # ------------------------------------------------------------------------------
-# 6) Destination Forwarding & External SOCKS Proxy
+# 6) Destination Forwarding
 # What this section does:
 # - Controls how the server connects to outbound destinations.
-# - In SOCKS5 mode, the destination normally comes from the client request.
+# - In SOCKS5 mode, the destination comes from the client request. The server
+#   refuses private, loopback and link-local addresses, also when a name
+#   resolves to one.
 # - In TCP mode, all connections go to one fixed destination.
-# - You can also configure the server to chain through an external SOCKS5 proxy.
 # ------------------------------------------------------------------------------
 
 # Timeout for outbound connect attempts made by the server.
-SOCKS_CONNECT_TIMEOUT = 60.0
+SOCKS_CONNECT_TIMEOUT = 20.0
 
-# If true, then in SOCKS5 mode the server does not connect to the final destination directly.
-# Instead, it first connects to another SOCKS5 proxy at FORWARD_IP:FORWARD_PORT
-# and asks that proxy to open the destination connection.
-# If false, SOCKS5 mode connects directly to the destination requested by the client.
-# This option does NOT change TCP mode behavior.
-USE_EXTERNAL_SOCKS5 = false
-
-# Username/password for the external SOCKS5 proxy.
-# Used only when:
-# - PROTOCOL_TYPE = "SOCKS5"
-# - USE_EXTERNAL_SOCKS5 = true
-# - and that external proxy requires username/password authentication
-SOCKS5_AUTH = false
-SOCKS5_USER = "admin"
-SOCKS5_PASS = "123456"
-
-# FORWARD_IP / FORWARD_PORT mean different things depending on how the server is used:
-# - If PROTOCOL_TYPE = "TCP":
-#   This is the final fixed destination.
-#   Every client stream will be forwarded to this one address and port.
-# - If PROTOCOL_TYPE = "SOCKS5" and USE_EXTERNAL_SOCKS5 = true:
-#   This is the address and port of the external SOCKS5 proxy.
-# - If PROTOCOL_TYPE = "SOCKS5" and USE_EXTERNAL_SOCKS5 = false:
-#   These values are not used for normal client SOCKS connections.
+# In TCP mode (PROTOCOL_TYPE = "TCP") this is the one fixed destination of
+# every client stream. Not used in SOCKS5 mode.
 FORWARD_IP = ""
 FORWARD_PORT = 0
+
+# ------------------------------------------------------------------------------
+# 6b) The zone this server answers for
+# What this section does:
+# - Makes the server a minimal authoritative server for its DOMAIN: an SOA, NS
+#   and A record at the apex and an empty NOERROR answer for everything else
+#   inside the zone. Names outside DOMAIN are answered REFUSED.
+# ------------------------------------------------------------------------------
+
+# Name of the zone's name server (the SOA mname and the apex NS record).
+ZONE_NS_NAME = ""
+
+# IPv4 address of the apex A record.
+ZONE_A_ADDRESS = ""
+
+# Hex key (at least 32 hex characters) of the delegation check name
+# _mgchk-<nonce>.<zone>, which answers hex(HMAC-SHA256(key, nonce)).
+ZONE_CHECK_KEY = ""
 
 # ------------------------------------------------------------------------------
 # 7) Security
@@ -198,7 +207,7 @@ STREAM_RESULT_PACKET_TTL_SECONDS = 300.0
 STREAM_FAILURE_PACKET_TTL_SECONDS = 120.0
 
 # ARQ timing / retry profile.
-ARQ_WINDOW_SIZE = 1000
+ARQ_WINDOW_SIZE = 512
 ARQ_INITIAL_RTO_SECONDS = 0.5
 ARQ_MAX_RTO_SECONDS = 3.0
 ARQ_CONTROL_INITIAL_RTO_SECONDS = 0.5
@@ -231,8 +240,16 @@ ARQ_TERMINAL_ACK_WAIT_TIMEOUT_SECONDS = 90.0
 #   during SESSION_ACCEPT.
 # ------------------------------------------------------------------------------
 
-MAX_ALLOWED_CLIENT_ACTIVE_SESSION = 255
-MAX_ALLOWED_CLIENT_ACTIVE_STREAMS_PER_SESSION = 2000
+MAX_ALLOWED_CLIENT_ACTIVE_SESSION = 64
+
+# A further INIT of a device that already holds this many sessions closes its
+# idlest one, so that a reconnecting client never waits for its own stale session.
+MAX_SESSIONS_PER_CREDENTIAL = 2
+
+# Queries one session may send per second (a burst of twice that is allowed);
+# the rest are answered with an empty answer.
+MAX_REQUESTS_PER_SESSION_PER_SECOND = 2000
+MAX_ALLOWED_CLIENT_ACTIVE_STREAMS_PER_SESSION = 64
 
 # ------------------------------------------------------------------------------
 # 8.1) Client Policy Sync Limits
@@ -264,7 +281,7 @@ MIN_ALLOWED_CLIENT_PING_AGGRESSIVE_INTERVAL_SECONDS = 0.05
 MAX_ALLOWED_CLIENT_PACKETS_PER_BATCH = 20
 
 # Fits in uint16 and also clamped to the current product policy ceiling.
-MAX_ALLOWED_CLIENT_ARQ_WINDOW_SIZE = 8000
+MAX_ALLOWED_CLIENT_ARQ_WINDOW_SIZE = 512
 
 # Fits in uint8.
 MAX_ALLOWED_CLIENT_ARQ_DATA_NACK_MAX_GAP = 255

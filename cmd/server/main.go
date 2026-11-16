@@ -143,19 +143,6 @@ func main() {
 	}
 
 	log.Infof("Device credential: %s (ChaCha20-Poly1305)", credential.ID)
-	if cfg.UseExternalSOCKS5 {
-		authMode := "OFF"
-		if cfg.SOCKS5Auth {
-			authMode = "ON"
-		}
-		log.Infof(
-			"\U0001F9E6 <green>External SOCKS5 Upstream: <cyan>%s:%d</cyan> <magenta>|</magenta> Auth: <cyan>%s</cyan></green>",
-			cfg.ForwardIP,
-			cfg.ForwardPort,
-			authMode,
-		)
-	}
-
 	log.Debugf("\u25B6\uFE0F <green>Starting UDP Server...</green>")
 
 	if err := srv.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {

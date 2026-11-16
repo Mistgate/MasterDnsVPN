@@ -12,7 +12,6 @@ import (
 	"errors"
 	"io"
 	"net"
-	"strconv"
 	"testing"
 	"time"
 
@@ -127,9 +126,9 @@ func TestProcessDeferredStreamSynQueuesConnectedAndEnablesIO(t *testing.T) {
 	local, remote := net.Pipe()
 	defer remote.Close()
 
-	s.dialStreamUpstreamFn = func(network string, address string, timeoutSeconds time.Duration) (net.Conn, error) {
+	setTestDial(s, func(network string, address string, timeoutSeconds time.Duration) (net.Conn, error) {
 		return local, nil
-	}
+	})
 
 	packet := packetWithSession(Enums.PACKET_STREAM_SYN, record.ID, 2)
 	s.processDeferredStreamSyn(context.Background(), packet)
@@ -165,11 +164,11 @@ func TestProcessDeferredStreamSynDoesNotAttachAfterCancellation(t *testing.T) {
 	dialStarted := make(chan struct{})
 	releaseDial := make(chan struct{})
 	conn := &testNetConn{}
-	s.dialStreamUpstreamFn = func(network string, address string, timeout time.Duration) (net.Conn, error) {
+	setTestDial(s, func(network string, address string, timeout time.Duration) (net.Conn, error) {
 		close(dialStarted)
 		<-releaseDial
 		return conn, nil
-	}
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -301,11 +300,11 @@ func TestProcessDeferredSOCKS5SynDoesNotAttachAfterCancellation(t *testing.T) {
 	dialStarted := make(chan struct{})
 	releaseDial := make(chan struct{})
 	conn := &testNetConn{}
-	s.dialStreamUpstreamFn = func(network string, address string, timeout time.Duration) (net.Conn, error) {
+	setTestDial(s, func(network string, address string, timeout time.Duration) (net.Conn, error) {
 		close(dialStarted)
 		<-releaseDial
 		return conn, nil
-	}
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -696,10 +695,10 @@ func TestProcessDeferredSOCKS5SynSkipsDialForRecentlyClosedStream(t *testing.T) 
 	s.sessions.byID[record.ID] = record
 	record.noteStreamClosed(10, time.Now(), false)
 
-	s.dialStreamUpstreamFn = func(network string, address string, timeout time.Duration) (net.Conn, error) {
+	setTestDial(s, func(network string, address string, timeout time.Duration) (net.Conn, error) {
 		t.Fatalf("unexpected dial for recently closed stream")
 		return nil, nil
-	}
+	})
 
 	packet := packetWithSession(Enums.PACKET_SOCKS5_SYN, record.ID, 10)
 	packet.Payload = []byte{0x01, 127, 0, 0, 1, 0x01, 0xBB}
@@ -712,9 +711,9 @@ func TestProcessDeferredSOCKS5SynClearsQueuedDuplicatesAfterConnectFailure(t *te
 	s := newTestServerForStreamSyn("SOCKS5")
 	record := newTestSessionRecord(42)
 	s.sessions.byID[record.ID] = record
-	s.dialStreamUpstreamFn = func(network string, address string, timeout time.Duration) (net.Conn, error) {
+	setTestDial(s, func(network string, address string, timeout time.Duration) (net.Conn, error) {
 		return nil, errors.New("dial failed")
-	}
+	})
 
 	lane := deferredSessionLane{sessionID: record.ID, streamID: 15}
 	if !s.deferredConnectSession.Enqueue(lane, func(context.Context) {}) {
@@ -739,9 +738,9 @@ func TestProcessDeferredStreamSynQueuesConnectFailOnDialError(t *testing.T) {
 	s := newTestServerForStreamSyn("TCP")
 	record := newTestSessionRecord(23)
 	s.sessions.byID[record.ID] = record
-	s.dialStreamUpstreamFn = func(network string, address string, timeout time.Duration) (net.Conn, error) {
+	setTestDial(s, func(network string, address string, timeout time.Duration) (net.Conn, error) {
 		return nil, errors.New("dial failed")
-	}
+	})
 
 	packet := packetWithSession(Enums.PACKET_STREAM_SYN, record.ID, 3)
 	s.processDeferredStreamSyn(context.Background(), packet)
@@ -768,10 +767,10 @@ func TestProcessDeferredStreamSynIgnoresLateDialCompletionAfterSessionClose(t *t
 	s.sessions.byID[record.ID] = record
 
 	conn := &testNetConn{}
-	s.dialStreamUpstreamFn = func(network string, address string, timeout time.Duration) (net.Conn, error) {
+	setTestDial(s, func(network string, address string, timeout time.Duration) (net.Conn, error) {
 		record.markClosed()
 		return conn, nil
-	}
+	})
 
 	packet := packetWithSession(Enums.PACKET_STREAM_SYN, record.ID, 30)
 	s.processDeferredStreamSyn(context.Background(), packet)
@@ -809,10 +808,10 @@ func TestProcessDeferredStreamSynTimesOutBlockedDial(t *testing.T) {
 	s.socksConnectTimeout = 50 * time.Millisecond
 	record := newTestSessionRecord(26)
 	s.sessions.byID[record.ID] = record
-	s.dialStreamUpstreamFn = func(network string, address string, timeout time.Duration) (net.Conn, error) {
+	setTestDial(s, func(network string, address string, timeout time.Duration) (net.Conn, error) {
 		time.Sleep(500 * time.Millisecond)
 		return nil, nil
-	}
+	})
 
 	packet := packetWithSession(Enums.PACKET_STREAM_SYN, record.ID, 4)
 	startedAt := time.Now()
@@ -837,9 +836,9 @@ func TestProcessDeferredStreamSynClearsQueuedDuplicatesAfterDialFailure(t *testi
 	s := newTestServerForStreamSyn("TCP")
 	record := newTestSessionRecord(41)
 	s.sessions.byID[record.ID] = record
-	s.dialStreamUpstreamFn = func(network string, address string, timeout time.Duration) (net.Conn, error) {
+	setTestDial(s, func(network string, address string, timeout time.Duration) (net.Conn, error) {
 		return nil, errors.New("dial failed")
-	}
+	})
 
 	lane := deferredSessionLane{sessionID: record.ID, streamID: 12}
 	if !s.deferredConnectSession.Enqueue(lane, func(context.Context) {}) {
@@ -857,11 +856,11 @@ func TestProcessDeferredStreamSynClearsQueuedDuplicatesAfterDialFailure(t *testi
 	}
 }
 
-func TestDeferredConnectAttemptTimeoutClampsExcessiveConfig(t *testing.T) {
+func TestDeferredConnectAttemptTimeoutFollowsConfig(t *testing.T) {
 	s := newTestServerForStreamSyn("SOCKS5")
-	s.socksConnectTimeout = 120 * time.Second
-	if got := s.deferredConnectAttemptTimeout(); got != maxDeferredConnectAttemptTimeout {
-		t.Fatalf("unexpected deferred connect timeout clamp: got=%s want=%s", got, maxDeferredConnectAttemptTimeout)
+	s.socksConnectTimeout = 20 * time.Second
+	if got := s.deferredConnectAttemptTimeout(); got != 20*time.Second {
+		t.Fatalf("unexpected deferred connect timeout: got=%s want=%s", got, 20*time.Second)
 	}
 }
 
@@ -870,15 +869,15 @@ func TestDialTCPTargetContextPassesEffectiveDeadlineToDialer(t *testing.T) {
 	s.socksConnectTimeout = 120 * time.Second
 
 	var received time.Duration
-	s.dialStreamUpstreamFn = func(network string, address string, timeout time.Duration) (net.Conn, error) {
+	setTestDial(s, func(network string, address string, timeout time.Duration) (net.Conn, error) {
 		received = timeout
 		return nil, context.DeadlineExceeded
-	}
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	_, _ = s.dialTCPTargetContext(ctx, "149.154.167.92:443")
+	_, _ = s.dialTCPTargetContext(ctx, "", "149.154.167.92:443")
 	if received <= 0 || received > 200*time.Millisecond {
 		t.Fatalf("expected effective dial timeout to follow context deadline, got %s", received)
 	}
@@ -889,10 +888,10 @@ func TestProcessDeferredSOCKS5SynTimesOutBlockedDial(t *testing.T) {
 	s.socksConnectTimeout = 50 * time.Millisecond
 	record := newTestSessionRecord(27)
 	s.sessions.byID[record.ID] = record
-	s.dialStreamUpstreamFn = func(network string, address string, timeout time.Duration) (net.Conn, error) {
+	setTestDial(s, func(network string, address string, timeout time.Duration) (net.Conn, error) {
 		time.Sleep(500 * time.Millisecond)
 		return nil, nil
-	}
+	})
 
 	packet := packetWithSession(Enums.PACKET_SOCKS5_SYN, record.ID, 5)
 	packet.Payload = []byte{0x01, 149, 154, 167, 92, 0x01, 0xBB}
@@ -968,134 +967,13 @@ func TestValidateSOCKSTargetHostAllowsPublicTargets(t *testing.T) {
 
 func TestDialSOCKSStreamTargetRejectsBlockedTargetBeforeDial(t *testing.T) {
 	s := newTestServerForStreamSyn("SOCKS5")
-	s.useExternalSOCKS5 = true
-	s.dialStreamUpstreamFn = func(network string, address string, timeout time.Duration) (net.Conn, error) {
+	setTestDial(s, func(network string, address string, timeout time.Duration) (net.Conn, error) {
 		t.Fatalf("unexpected dial attempt to %s", address)
 		return nil, nil
-	}
+	})
 
-	if _, err := s.dialSOCKSStreamTarget("127.0.0.1", 80, []byte{0x01, 0x7f, 0x00, 0x00, 0x01, 0x00, 0x50}); err == nil {
+	if _, err := s.dialSOCKSStreamTarget("127.0.0.1", 80); err == nil {
 		t.Fatal("expected blocked target error")
-	}
-}
-
-func TestDialSOCKSStreamTargetBypassesExternalProxyForTCPModeConnects(t *testing.T) {
-	s := newTestServerForStreamSyn("TCP")
-	s.useExternalSOCKS5 = true
-	s.externalSOCKS5Address = "203.0.113.10:1080"
-
-	var gotNetwork string
-	var gotAddress string
-	s.dialStreamUpstreamFn = func(network string, address string, timeout time.Duration) (net.Conn, error) {
-		gotNetwork = network
-		gotAddress = address
-		return &testNetConn{}, nil
-	}
-
-	conn, err := s.dialTCPTargetContext(context.Background(), net.JoinHostPort(s.cfg.ForwardIP, strconv.Itoa(s.cfg.ForwardPort)))
-	if err != nil {
-		t.Fatalf("unexpected direct dial error: %v", err)
-	}
-	if conn == nil {
-		t.Fatal("expected direct TCP dial connection")
-	}
-
-	if gotNetwork != "tcp" {
-		t.Fatalf("unexpected network: got=%q want=%q", gotNetwork, "tcp")
-	}
-	wantAddress := net.JoinHostPort(s.cfg.ForwardIP, strconv.Itoa(s.cfg.ForwardPort))
-	if gotAddress != wantAddress {
-		t.Fatalf("unexpected dial address: got=%q want=%q", gotAddress, wantAddress)
-	}
-	if gotAddress == s.externalSOCKS5Address {
-		t.Fatal("expected TCP mode connect path to bypass external SOCKS5 address")
-	}
-}
-
-func TestDialSOCKSStreamTargetUsesExternalProxyWhenEnabled(t *testing.T) {
-	s := newTestServerForStreamSyn("SOCKS5")
-	s.useExternalSOCKS5 = true
-	s.externalSOCKS5Address = "203.0.113.10:1080"
-
-	conn := &scriptedSOCKS5Conn{
-		readBufs: [][]byte{
-			{0x05, 0x00},                 // greeting reply: no-auth
-			{0x05, 0x00, 0x00, 0x01},     // connect reply header
-			{203, 0, 113, 1, 0x04, 0x38}, // bound addr + port
-		},
-	}
-
-	var gotNetwork string
-	var gotAddress string
-	s.dialStreamUpstreamFn = func(network string, address string, timeout time.Duration) (net.Conn, error) {
-		gotNetwork = network
-		gotAddress = address
-		return conn, nil
-	}
-
-	targetPayload := []byte{0x03, 0x0b, 'e', 'x', 'a', 'm', 'p', 'l', 'e', '.', 'c', 'o', 'm', 0x01, 0xbb}
-	upstream, err := s.dialSOCKSStreamTargetContext(context.Background(), "example.com", 443, targetPayload)
-	if err != nil {
-		t.Fatalf("unexpected external SOCKS5 dial error: %v", err)
-	}
-	if upstream != conn {
-		t.Fatal("expected external SOCKS5 path to return the proxy-backed connection")
-	}
-	if gotNetwork != "tcp" {
-		t.Fatalf("unexpected network: got=%q want=%q", gotNetwork, "tcp")
-	}
-	if gotAddress != s.externalSOCKS5Address {
-		t.Fatalf("unexpected external proxy dial address: got=%q want=%q", gotAddress, s.externalSOCKS5Address)
-	}
-	if len(conn.writes) != 2 {
-		t.Fatalf("expected greeting and connect request writes, got %d writes", len(conn.writes))
-	}
-	if got := conn.writes[0]; len(got) != 3 || got[0] != 0x05 || got[1] != 0x01 || got[2] != 0x00 {
-		t.Fatalf("unexpected greeting bytes: %v", got)
-	}
-	if got := conn.writes[1]; len(got) != 3+len(targetPayload) || got[0] != 0x05 || got[1] != 0x01 || got[2] != 0x00 {
-		t.Fatalf("unexpected connect request header: %v", got)
-	}
-	if got := conn.writes[1][3:]; !equalBytes(got, targetPayload) {
-		t.Fatalf("unexpected target payload forwarded to external proxy: got=%v want=%v", got, targetPayload)
-	}
-	if conn.deadlineActive {
-		t.Fatal("expected SOCKS5 path to clear connection deadline after successful handshake")
-	}
-}
-
-func TestDialSOCKSStreamTargetExternalProxyDetachesSuccessfulConnFromHandshakeContext(t *testing.T) {
-	s := newTestServerForStreamSyn("SOCKS5")
-	s.useExternalSOCKS5 = true
-	s.externalSOCKS5Address = "203.0.113.10:1080"
-
-	conn := &scriptedSOCKS5Conn{
-		readBufs: [][]byte{
-			{0x05, 0x00},
-			{0x05, 0x00, 0x00, 0x01},
-			{203, 0, 113, 1, 0x04, 0x38},
-		},
-	}
-
-	s.dialStreamUpstreamFn = func(network string, address string, timeout time.Duration) (net.Conn, error) {
-		return conn, nil
-	}
-
-	targetPayload := []byte{0x03, 0x0b, 'e', 'x', 'a', 'm', 'p', 'l', 'e', '.', 'c', 'o', 'm', 0x01, 0xbb}
-	ctx, cancel := context.WithCancel(context.Background())
-	upstream, err := s.dialSOCKSStreamTargetContext(ctx, "example.com", 443, targetPayload)
-	if err != nil {
-		t.Fatalf("unexpected external SOCKS5 dial error: %v", err)
-	}
-	if upstream != conn {
-		t.Fatal("expected proxy-backed connection to be returned")
-	}
-
-	cancel()
-	time.Sleep(20 * time.Millisecond)
-
-	if conn.closed {
-		t.Fatal("expected successful external SOCKS5 connection to stay open after handshake context cancellation")
 	}
 }
 

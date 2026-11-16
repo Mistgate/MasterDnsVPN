@@ -227,12 +227,12 @@ func runEndToEnd(t *testing.T, lossPct int32, size int) {
 	server, _ := newProtocolTestServer(t, serverCfg, logger.New("e2e-server", "error"))
 	// The hostname below is not an IP literal, so it passes the SSRF guard; the
 	// hook then connects it to the local echo server instead of resolving it.
-	server.dialStreamUpstreamFn = func(network, address string, timeout time.Duration) (net.Conn, error) {
+	setTestDial(server, func(network, address string, timeout time.Duration) (net.Conn, error) {
 		if address != net.JoinHostPort("echo.test", "7007") {
 			return nil, fmt.Errorf("unexpected upstream %q", address)
 		}
 		return net.DialTimeout("tcp4", echoAddr, timeout)
-	}
+	})
 	serverCtx, stopServer := context.WithCancel(context.Background())
 	serverDone := make(chan error, 1)
 	go func() { serverDone <- server.Run(serverCtx) }()

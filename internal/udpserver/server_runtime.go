@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -208,11 +209,7 @@ func (s *Server) readLoop(ctx context.Context, conn *net.UDPConn, reqCh chan<- r
 				s.packetPool.Put(buffer)
 				continue
 			}
-			parsed, parseErr, ok := s.safeParseDNSDatagram(packet)
-			if !ok {
-				s.packetPool.Put(buffer)
-				continue
-			}
+			parsed, parseErr := s.parseDNSDatagram(packet)
 			if parseErr != nil {
 				fallback.RouteNonDNS(packet, addr, conn)
 				s.packetPool.Put(buffer)
@@ -227,9 +224,6 @@ func (s *Server) readLoop(ctx context.Context, conn *net.UDPConn, reqCh chan<- r
 				s.packetPool.Put(buffer)
 				continue
 			}
-			req.parsed = parsed
-			req.parseErr = parseErr
-			req.hasParsedDNS = true
 			req.fallbackEpoch = epoch
 		}
 
@@ -255,13 +249,12 @@ func (s *Server) dnsWorker(ctx context.Context, conn *net.UDPConn, reqCh <-chan 
 				return
 			}
 
-			var response []byte
 			packet := req.buf[:req.size]
-			if req.hasParsedDNS {
-				response = s.safeHandleParsedPacket(packet, req.parsed, req.parseErr)
-			} else {
-				response = s.safeHandlePacket(packet)
+			var src netip.AddrPort
+			if req.addr != nil {
+				src = req.addr.AddrPort()
 			}
+			response := s.HandleQuery(src, packet, 0, false)
 			if len(response) != 0 {
 				writeConn := conn
 				if req.conn != nil {
@@ -288,54 +281,6 @@ func (s *Server) dnsWorker(ctx context.Context, conn *net.UDPConn, reqCh <-chan 
 	}
 }
 
-func (s *Server) safeHandlePacket(packet []byte) (response []byte) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			if s.log != nil {
-				s.log.Errorf(
-					"\U0001F4A5 <red>Packet Handler Panic Recovered, <yellow>%v</yellow></red>",
-					recovered,
-				)
-			}
-			response = nil
-		}
-	}()
-
-	return s.handlePacket(packet)
-}
-
-func (s *Server) safeParseDNSDatagram(packet []byte) (parsed DnsParser.LitePacket, parseErr error, ok bool) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			if s.log != nil {
-				s.log.Errorf(
-					"\U0001F4A5 <red>Packet Parser Panic Recovered, <yellow>%v</yellow></red>",
-					recovered,
-				)
-			}
-		}
-	}()
-
-	parsed, parseErr = DnsParser.ParseDNSDatagramLite(packet)
-	return parsed, parseErr, true
-}
-
-func (s *Server) safeHandleParsedPacket(packet []byte, parsed DnsParser.LitePacket, parseErr error) (response []byte) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			if s.log != nil {
-				s.log.Errorf(
-					"\U0001F4A5 <red>Packet Handler Panic Recovered, <yellow>%v</yellow></red>",
-					recovered,
-				)
-			}
-			response = nil
-		}
-	}()
-
-	return s.handleParsedPacket(packet, parsed, parseErr)
-}
-
 func (s *Server) onDrop(addr *net.UDPAddr, queueLen int, queueCap int) {
 	total := s.droppedPackets.Add(1)
 
@@ -359,4 +304,18 @@ func (s *Server) onDrop(addr *net.UDPAddr, queueLen int, queueCap int) {
 		queueCap,
 		addr,
 	)
+}
+
+// parseDNSDatagram parses a datagram of the fallback classifier; a parser panic
+// is reported as "not DNS" instead of ending the process.
+func (s *Server) parseDNSDatagram(packet []byte) (parsed DnsParser.LitePacket, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if s.log != nil {
+				s.log.Errorf("\U0001F4A5 <red>Packet Parser Panic Recovered, <yellow>%v</yellow></red>", recovered)
+			}
+			err = DnsParser.ErrNotDNSMessage
+		}
+	}()
+	return DnsParser.ParseDNSDatagramLite(packet)
 }

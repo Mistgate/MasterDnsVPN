@@ -521,7 +521,7 @@ func TestStartupQualificationRejectsMalformedBurst(t *testing.T) {
 					} else {
 						binary.BigEndian.PutUint16(packet.Payload[4:6], 499)
 					}
-					response, err = DnsParser.BuildVPNResponsePacket(buf[:n], "example.com", packet, false)
+					response, err = DnsParser.BuildVPNResponsePacket(buf[:n], packet, false)
 					if err == nil {
 						_, _ = serverConn.WriteToUDP(response, remote)
 					}

@@ -286,13 +286,13 @@ func TestDownlinkFramesShareNoRepeatingBytes(t *testing.T) {
 func TestCapturedInitIsAnsweredOnlyAFewTimes(t *testing.T) {
 	server, credential := replayTestServer(t)
 	_, query, firstAccept := establish(t, server, credential) // answer 1
-	for i := 2; i <= maxInitAnswers; i++ {
+	for i := 2; i <= maxInitUDPAnswers; i++ {
 		got, err := DnsParser.ExtractVPNResponsePayload(server.HandlePacket(query), false)
 		if err != nil || !bytes.Equal(got, firstAccept) {
 			t.Fatalf("answer %d of the same INIT was not the cached ACCEPT (err=%v)", i, err)
 		}
 	}
 	if response := server.HandlePacket(query); len(response) != 0 {
-		t.Fatalf("answer %d to one captured INIT: %d bytes, want silence", maxInitAnswers+1, len(response))
+		t.Fatalf("answer %d to one captured INIT: %d bytes, want silence", maxInitUDPAnswers+1, len(response))
 	}
 }

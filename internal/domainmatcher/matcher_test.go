@@ -14,12 +14,12 @@ import (
 	Enums "masterdnsvpn-go/internal/enums"
 )
 
-func TestMatcherReturnsNoDataForUnauthorizedDomain(t *testing.T) {
+func TestMatcherRefusesUnauthorizedDomain(t *testing.T) {
 	matcher := New([]string{"a.com", "c.b.com", "cc.com"}, 3)
 
 	decision := matcher.Match(litePacketWithQuestion("evil.com", Enums.DNS_RECORD_TYPE_TXT))
-	if decision.Action != ActionNoData {
-		t.Fatalf("unexpected action: got=%d want=%d", decision.Action, ActionNoData)
+	if decision.Action != ActionRefused {
+		t.Fatalf("unexpected action: got=%d want=%d", decision.Action, ActionRefused)
 	}
 	if decision.Reason != "unauthorized-domain" {
 		t.Fatalf("unexpected reason: got=%q", decision.Reason)
@@ -81,8 +81,8 @@ func TestMatcherRespectsBoundaryBeforeSuffix(t *testing.T) {
 	matcher := New([]string{"a.com"}, 3)
 
 	decision := matcher.Match(litePacketWithQuestion("notreallya.com", Enums.DNS_RECORD_TYPE_TXT))
-	if decision.Action != ActionNoData {
-		t.Fatalf("unexpected action: got=%d want=%d", decision.Action, ActionNoData)
+	if decision.Action != ActionRefused {
+		t.Fatalf("unexpected action: got=%d want=%d", decision.Action, ActionRefused)
 	}
 	if decision.Reason != "unauthorized-domain" {
 		t.Fatalf("unexpected reason: got=%q", decision.Reason)

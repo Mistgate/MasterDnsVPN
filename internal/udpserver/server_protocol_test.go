@@ -241,8 +241,12 @@ func TestIdlePongsHaveNoClearPOPlaintext(t *testing.T) {
 		t.Fatal(err)
 	}
 	record := &sessionRuntimeView{ID: sessionID, Crypto: serverCipher}
-	first := server.serveQueuedOrPong(query, "x.v.example.com", record, time.Now())
-	second := server.serveQueuedOrPong(query, "x.v.example.com", record, time.Now())
+	parsedQuery, err := DnsParser.ParseDNSRequestLite(query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := server.serveQueuedOrPong(&queryContext{}, query, parsedQuery, record, time.Now())
+	second := server.serveQueuedOrPong(&queryContext{}, query, parsedQuery, record, time.Now())
 	if len(first) == 0 || len(second) == 0 {
 		t.Fatal("expected two idle PONG DNS responses")
 	}

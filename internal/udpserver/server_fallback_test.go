@@ -271,8 +271,8 @@ func TestDNSWorkerFallbackRoundTripKeepsOtherDNSPeerLocal(t *testing.T) {
 	if len(dnsReply) < 12 {
 		t.Fatalf("DNS reply too short: %d", len(dnsReply))
 	}
-	if got := binary.BigEndian.Uint16(dnsReply[2:4]) & 0x000F; got != Enums.DNSR_CODE_NAME_ERROR {
-		t.Fatalf("unexpected DNS rcode: got=%d want=%d", got, Enums.DNSR_CODE_NAME_ERROR)
+	if got := binary.BigEndian.Uint16(dnsReply[2:4]) & 0x000F; got != Enums.DNSR_CODE_REFUSED {
+		t.Fatalf("unexpected DNS rcode: got=%d want=%d", got, Enums.DNSR_CODE_REFUSED)
 	}
 	select {
 	case forwarded := <-echo.received:

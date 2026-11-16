@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"time"
 
 	baseCodec "masterdnsvpn-go/internal/basecodec"
@@ -19,11 +18,16 @@ import (
 
 const (
 	maxInitCache = 1024
-	// maxInitAnswers bounds how often one INIT is answered with its cached ACCEPT.
-	// A client retries and races the same INIT a handful of times; a captured INIT
-	// replayed from a spoofed source would otherwise be answered for the whole
-	// 120 s window with an answer larger than the request.
-	maxInitAnswers = 16
+	// maxInitUDPAnswers bounds how often one INIT is answered over UDP with its
+	// cached ACCEPT. A client retries and races the same INIT a handful of
+	// times; a captured INIT replayed from a spoofed source would otherwise be
+	// answered for the whole 120 s window. An ACCEPT is longer than its INIT
+	// (the question is echoed in both, the ACCEPT adds its own record), so the
+	// worst a captured INIT can reflect is maxInitUDPAnswers answers of about
+	// 1.5 times the INIT each. TCP cannot be spoofed and has its own, larger
+	// bound.
+	maxInitUDPAnswers = 6
+	maxInitTCPAnswers = 16
 )
 
 type initCacheKey struct {
@@ -36,10 +40,12 @@ type cachedInit struct {
 	initMessage []byte
 	responseB64 bool
 	expires     time.Time
-	answers     int
+	udpAnswers  int
+	tcpAnswers  int
+	credential  string
 }
 
-func (s *Server) handleSecureTunnelCandidate(packet []byte, parsed DnsParser.LitePacket, decision domainMatcher.Decision) []byte {
+func (s *Server) handleSecureTunnelCandidate(qc *queryContext, packet []byte, parsed DnsParser.LitePacket, decision domainMatcher.Decision) []byte {
 	wire, err := baseCodec.DecodeString(decision.Labels)
 	if err != nil {
 		return nil
@@ -50,12 +56,16 @@ func (s *Server) handleSecureTunnelCandidate(packet []byte, parsed DnsParser.Lit
 		sessionID := wire[0]
 		if record, ok := s.sessions.Get(sessionID); ok && record != nil {
 			if cipher := record.cipher(); cipher != nil {
-				plain, _, openErr := cipher.Open(wire)
+				plain, counter, openErr := cipher.Open(wire)
 				if errors.Is(openErr, security.ErrReplay) {
-					return s.buildNoDataResponseLiteLogged(packet, parsed, "replayed-frame")
+					return s.handleReplayedFrame(qc, packet, parsed, record, counter)
 				}
 				if openErr == nil {
-					return s.handleAuthenticatedFrame(packet, parsed, decision, sessionID, plain)
+					qc.authenticated = true
+					qc.session = record
+					qc.counter, qc.hasCounter = counter, true
+					record.noteSource(qc.src.Addr())
+					return s.handleAuthenticatedFrame(qc, packet, parsed, sessionID, plain)
 				}
 			}
 		}
@@ -69,9 +79,11 @@ func (s *Server) handleSecureTunnelCandidate(packet []byte, parsed DnsParser.Lit
 		if credential, init, err := security.OpenSessionInit(wire, s.credentialIndex, time.Now()); err == nil {
 			// Keep rejected INITs silent rather than letting the generic DNS
 			// fallback turn them into responses.
-			if response := s.handleSecureSessionInit(packet, decision.RequestName, credential, init, wire); response != nil {
+			qc.authenticated = true
+			if response := s.handleSecureSessionInit(qc, packet, parsed, credential, init, wire); response != nil {
 				return response
 			}
+			qc.authenticated = false
 			return []byte{}
 		}
 	}
@@ -83,13 +95,15 @@ func (s *Server) handleSecureTunnelCandidate(packet []byte, parsed DnsParser.Lit
 		}
 		if !s.probeLimiter.Allow(credential.KID, probe.Nonce, time.Now()) {
 			// Replayed, stale or over budget: a small answer without data.
-			return s.buildNoDataResponseLiteLogged(packet, parsed, "mtu-probe-rejected")
+			s.stats.probeLimited.Add(1)
+			return s.buildInZoneNoData(packet, parsed)
 		}
 		vpnPacket, parseErr := VpnProto.Parse(probe.Payload)
 		if parseErr != nil {
-			return s.buildNoDataResponseLiteLogged(packet, parsed, "invalid-mtu-probe")
+			return s.buildInZoneNoData(packet, parsed)
 		}
-		return s.handleAuthenticatedMTUProbe(packet, decision.RequestName, credential, vpnPacket)
+		qc.authenticated = true
+		return s.handleAuthenticatedMTUProbe(packet, parsed, credential, vpnPacket)
 	}
 	if initLengthCandidate {
 		return []byte{}
@@ -97,42 +111,74 @@ func (s *Server) handleSecureTunnelCandidate(packet []byte, parsed DnsParser.Lit
 	return nil
 }
 
-func (s *Server) handleAuthenticatedFrame(packet []byte, parsed DnsParser.LitePacket, decision domainMatcher.Decision, sessionID uint8, plain []byte) []byte {
+// handleReplayedFrame answers a frame whose tag verified but whose counter the
+// replay window already used: a resolver that asked again, or the TCP retry of
+// an answer that came back truncated. The sealed answer of the first copy is
+// repeated when the repeat is allowed (see answerCache); otherwise the answer
+// is the usual empty one, no longer than the query.
+func (s *Server) handleReplayedFrame(qc *queryContext, packet []byte, parsed DnsParser.LitePacket, record *sessionRecord, counter uint32) []byte {
+	s.stats.replays.Add(1)
+	if frame, ok := record.answers.get(counter, qc.src.Addr(), qc.tcp, time.Now()); ok {
+		response, err := DnsParser.BuildVPNResponseFromLite(packet, parsed, frame, record.ResponseMode == mtuProbeModeBase64)
+		if err == nil {
+			s.stats.cacheServed.Add(1)
+			qc.authenticated = true
+			qc.session = record
+			return response
+		}
+	}
+	return s.buildInZoneNoData(packet, parsed)
+}
+
+func (s *Server) handleAuthenticatedFrame(qc *queryContext, packet []byte, parsed DnsParser.LitePacket, sessionID uint8, plain []byte) []byte {
+	now := time.Now()
+	if qc.session != nil && !qc.session.allowRequest(now, s.requestRate) {
+		s.stats.rateLimited.Add(1)
+		qc.authenticated = false
+		return s.buildInZoneNoData(packet, parsed)
+	}
 	vpnPacket, parseErr := VpnProto.Parse(plain)
 	if parseErr != nil {
-		return s.buildNoDataResponseLiteLogged(packet, parsed, "invalid-authenticated-frame")
+		return s.buildInZoneNoData(packet, parsed)
 	}
 	vpnPacket.SessionID = sessionID
 
 	if vpnPacket.PacketType == Enums.PACKET_SESSION_CLOSE {
-		s.handleSessionCloseNotice(vpnPacket, time.Now())
-		return s.buildNoDataResponseLiteLogged(packet, parsed, "session-close-notice")
+		s.handleSessionCloseNotice(vpnPacket, now)
+		return s.buildInZoneNoData(packet, parsed)
 	}
-	validation := s.validatePostSessionPacket(packet, decision.RequestName, vpnPacket)
+	validation := s.validatePostSessionPacket(vpnPacket)
 	if !validation.ok {
-		return validation.response
+		return s.buildInZoneNoData(packet, parsed)
 	}
 	if !s.handlePostSessionPacket(vpnPacket, validation.record) {
-		return s.buildNoDataResponseLiteLogged(packet, parsed, fmt.Sprintf("post-session-unhandled-%s", Enums.PacketTypeName(vpnPacket.PacketType)))
+		return s.buildInZoneNoData(packet, parsed)
 	}
-	return s.serveQueuedOrPong(packet, decision.RequestName, validation.record, time.Now())
+	return s.serveQueuedOrPong(qc, packet, parsed, validation.record, time.Now())
 }
 
 // handleSecureSessionInit answers an authenticated INIT; nil means "stay silent".
 // The ACCEPT for an INIT is built once and cached until the INIT leaves its
 // timestamp window. A repeat returns the same bytes and never makes a second
 // session or a second key schedule for the same INIT.
-func (s *Server) handleSecureSessionInit(questionPacket []byte, requestName string, credential security.Credential, init security.SessionInit, message []byte) []byte {
+func (s *Server) handleSecureSessionInit(qc *queryContext, questionPacket []byte, parsed DnsParser.LitePacket, credential security.Credential, init security.SessionInit, message []byte) []byte {
 	key := initCacheKey{KID: init.KID, Ephemeral: init.Ephemeral}
 	now := time.Now()
 	s.protocolMu.Lock()
 	defer s.protocolMu.Unlock()
 	s.purgeInitCacheLocked(now)
 	if cached, ok := s.initCache[key]; ok {
-		if cached.answers >= maxInitAnswers {
-			return nil
+		if qc.tcp {
+			if cached.tcpAnswers >= maxInitTCPAnswers {
+				return nil
+			}
+			cached.tcpAnswers++
+		} else {
+			if cached.udpAnswers >= maxInitUDPAnswers {
+				return nil
+			}
+			cached.udpAnswers++
 		}
-		cached.answers++
 		s.initCache[key] = cached
 		if !bytes.Equal(cached.initMessage, message) {
 			// ACCEPT authenticates the complete INIT transcript. Reusing the
@@ -140,7 +186,7 @@ func (s *Server) handleSecureSessionInit(questionPacket []byte, requestName stri
 			// be answered with the previous ACCEPT.
 			return nil
 		}
-		response, buildErr := DnsParser.BuildVPNResponsePayload(questionPacket, requestName, cached.accept, cached.responseB64)
+		response, buildErr := DnsParser.BuildVPNResponseFromLite(questionPacket, parsed, cached.accept, cached.responseB64)
 		if buildErr != nil {
 			return nil
 		}
@@ -165,6 +211,7 @@ func (s *Server) handleSecureSessionInit(questionPacket []byte, requestName stri
 	signature := make([]byte, 0, security.CredentialIDSize+len(init.Ephemeral))
 	signature = append(signature, init.KID[:]...)
 	signature = append(signature, init.Ephemeral[:]...)
+	s.enforceCredentialSessionLimit(credential.ID, signature)
 	record, reused, err := s.sessions.findOrCreateWithSignature(
 		parameters,
 		signature,
@@ -209,22 +256,28 @@ func (s *Server) handleSecureSessionInit(questionPacket []byte, requestName stri
 		s.sessions.discardUnestablished(record)
 		return nil
 	}
-	record.setCrypto(serverCipher, credential.ID)
+	record.setCrypto(serverCipher, credential)
 	responseBase64 := parameters[0] == mtuProbeModeBase64
 	// An INIT is accepted while now.Unix() is within 120 s of its timestamp, so
 	// it stays cached until the second after that window closes.
 	cacheUntil := time.Unix(int64(init.Timestamp)+int64(security.InitTimestampWindow/time.Second)+1, 0)
-	s.initCache[key] = cachedInit{
+	entry := cachedInit{
 		accept:      append([]byte(nil), accept...),
 		initMessage: append([]byte(nil), message...),
 		responseB64: responseBase64,
 		expires:     cacheUntil,
-		answers:     1,
+		credential:  credential.ID,
 	}
+	if qc.tcp {
+		entry.tcpAnswers = 1
+	} else {
+		entry.udpAnswers = 1
+	}
+	s.initCache[key] = entry
 	if len(s.initCache) > maxInitCache {
 		s.evictOldestInitLocked()
 	}
-	response, err := DnsParser.BuildVPNResponsePayload(questionPacket, requestName, accept, responseBase64)
+	response, err := DnsParser.BuildVPNResponseFromLite(questionPacket, parsed, accept, responseBase64)
 	if err != nil {
 		return nil
 	}
@@ -234,6 +287,19 @@ func (s *Server) handleSecureSessionInit(questionPacket []byte, requestName stri
 func (s *Server) purgeInitCacheLocked(now time.Time) {
 	for key, value := range s.initCache {
 		if !now.Before(value.expires) {
+			delete(s.initCache, key)
+		}
+	}
+}
+
+// dropInitCacheForCredential forgets the cached ACCEPTs of a credential whose
+// sessions were just closed, so that a repeated INIT cannot hand out the keys
+// of a session that no longer exists.
+func (s *Server) dropInitCacheForCredential(credentialID string) {
+	s.protocolMu.Lock()
+	defer s.protocolMu.Unlock()
+	for key, value := range s.initCache {
+		if value.credential == credentialID {
 			delete(s.initCache, key)
 		}
 	}
@@ -253,7 +319,7 @@ func (s *Server) evictOldestInitLocked() {
 	}
 }
 
-func (s *Server) handleAuthenticatedMTUProbe(questionPacket []byte, requestName string, credential security.Credential, request VpnProto.Packet) []byte {
+func (s *Server) handleAuthenticatedMTUProbe(questionPacket []byte, parsed DnsParser.LitePacket, credential security.Credential, request VpnProto.Packet) []byte {
 	var response VpnProto.Packet
 	base64Reply := false
 	switch request.PacketType {
@@ -313,13 +379,9 @@ func (s *Server) handleAuthenticatedMTUProbe(questionPacket []byte, requestName 
 	if err != nil {
 		return nil
 	}
-	return buildSecureProbeDNSResponse(questionPacket, requestName, envelope, base64Reply)
-}
-
-func buildSecureProbeDNSResponse(questionPacket []byte, requestName string, envelope []byte, base64Reply bool) []byte {
-	response, err := DnsParser.BuildVPNResponsePayload(questionPacket, requestName, envelope, base64Reply)
+	answer, err := DnsParser.BuildVPNResponseFromLite(questionPacket, parsed, envelope, base64Reply)
 	if err != nil {
 		return nil
 	}
-	return response
+	return answer
 }

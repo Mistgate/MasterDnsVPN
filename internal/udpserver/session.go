@@ -12,6 +12,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync"
@@ -48,6 +49,13 @@ type sessionRecord struct {
 	VerifyCode                          [4]byte
 	Signature                           [sessionInitSignatureSize]byte
 	crypto                              atomic.Pointer[security.SessionCipher]
+	credentialKey                       [security.CredentialKeySize]byte
+	answers                             *answerCache
+	lastSource                          atomic.Pointer[netip.Addr]
+	rxQueries, rxBytes, txBytes         atomic.Uint64
+	rateMu                              sync.Mutex
+	rateTokens                          float64
+	rateLast                            time.Time
 	MaxPackedBlocks                     int
 	StreamReadBufferSize                int
 	CreatedAt                           time.Time
@@ -154,6 +162,7 @@ type sessionRuntimeView struct {
 	DownloadMTUBytes int
 	MaxPackedBlocks  int
 	Crypto           *security.SessionCipher
+	Answers          *answerCache
 }
 
 type closedSessionRecord struct {
@@ -309,6 +318,7 @@ func (s *sessionStore) findOrCreateWithSignature(
 		Streams:                    make(map[uint16]*Stream_server),
 		ActiveStreams:              make([]uint16, 0, 8),
 		StreamQueueCap:             s.streamQueueCap,
+		answers:                    &answerCache{},
 		MaxActiveStreamsPerSession: s.maxActiveStreams,
 		RecentlyClosed:             make(map[uint16]recentlyClosedStreamRecord, 8),
 		RecentlyClosedHeap:         make(recentlyClosedHeap, 0, 8),
@@ -338,6 +348,20 @@ func (s *sessionStore) findOrCreateWithSignature(
 	delete(s.recentClosed, uint8(slot))
 	s.nextID = uint16(nextSessionID(uint8(slot)))
 	return record, false, nil
+}
+
+// hasSignature reports whether a live session was opened by the INIT with this
+// signature (credential id and client ephemeral key).
+func (s *sessionStore) hasSignature(signatureData []byte) bool {
+	if len(signatureData) == 0 || len(signatureData) > sessionInitSignatureSize {
+		return false
+	}
+	var signature [sessionInitSignatureSize]byte
+	copy(signature[:], signatureData)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	sessionID, ok := s.bySig[signature]
+	return ok && s.byID[sessionID] != nil
 }
 
 func (s *sessionStore) expireReuseLocked(nowUnixNano int64) {
@@ -713,11 +737,62 @@ func (r *sessionRecord) cipher() *security.SessionCipher {
 }
 
 // setCrypto installs the session keys once, before the ACCEPT leaves the server.
-func (r *sessionRecord) setCrypto(cipher *security.SessionCipher, credentialID string) {
+func (r *sessionRecord) setCrypto(cipher *security.SessionCipher, credential security.Credential) {
 	r.mu.Lock()
-	r.CredentialID = credentialID
+	r.CredentialID = credential.ID
+	r.credentialKey = credential.Key
 	r.mu.Unlock()
 	r.crypto.Store(cipher)
+}
+
+// credentialID is the credential the session was opened with ("" until the
+// ACCEPT is built).
+func (r *sessionRecord) credentialID() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.CredentialID
+}
+
+// noteSource remembers the address of the resolver that last carried a query of
+// this session.
+func (r *sessionRecord) noteSource(addr netip.Addr) {
+	if !addr.IsValid() {
+		return
+	}
+	addr = addr.Unmap()
+	if current := r.lastSource.Load(); current != nil && *current == addr {
+		return
+	}
+	r.lastSource.Store(&addr)
+}
+
+// requestRate is the per-session request limit: a token bucket.
+type requestRate struct {
+	perSecond float64
+	burst     float64
+}
+
+// allowRequest takes one token from the session's request bucket.
+func (r *sessionRecord) allowRequest(now time.Time, limit requestRate) bool {
+	if limit.perSecond <= 0 {
+		return true
+	}
+	r.rateMu.Lock()
+	defer r.rateMu.Unlock()
+	if r.rateLast.IsZero() {
+		r.rateTokens = limit.burst
+	} else if elapsed := now.Sub(r.rateLast); elapsed > 0 {
+		r.rateTokens += elapsed.Seconds() * limit.perSecond
+		if r.rateTokens > limit.burst {
+			r.rateTokens = limit.burst
+		}
+	}
+	r.rateLast = now
+	if r.rateTokens < 1 {
+		return false
+	}
+	r.rateTokens--
+	return true
 }
 
 func (r *sessionRecord) runtimeView() sessionRuntimeView {
@@ -729,6 +804,7 @@ func (r *sessionRecord) runtimeView() sessionRuntimeView {
 		DownloadMTUBytes: r.DownloadMTUBytes,
 		MaxPackedBlocks:  r.MaxPackedBlocks,
 		Crypto:           r.crypto.Load(),
+		Answers:          r.answers,
 	}
 }
 

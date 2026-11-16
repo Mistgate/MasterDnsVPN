@@ -2,13 +2,14 @@ package udpserver
 
 import (
 	"encoding/binary"
+	"net/netip"
 	"testing"
 
 	domainMatcher "masterdnsvpn-go/internal/domainmatcher"
 	Enums "masterdnsvpn-go/internal/enums"
 )
 
-func TestHandlePacketRejectsUnauthorizedDomainAsNXDOMAIN(t *testing.T) {
+func TestHandlePacketRefusesUnauthorizedDomain(t *testing.T) {
 	server := &Server{
 		domainMatcher: domainMatcher.New([]string{"vpn.example.com"}, 3),
 	}
@@ -20,14 +21,14 @@ func TestHandlePacketRejectsUnauthorizedDomainAsNXDOMAIN(t *testing.T) {
 	}
 
 	flags := binary.BigEndian.Uint16(response[2:4])
-	if got := flags & 0x000F; got != Enums.DNSR_CODE_NAME_ERROR {
-		t.Fatalf("unexpected rcode: got=%d want=%d", got, Enums.DNSR_CODE_NAME_ERROR)
+	if got := flags & 0x000F; got != Enums.DNSR_CODE_REFUSED {
+		t.Fatalf("unexpected rcode: got=%d want=%d", got, Enums.DNSR_CODE_REFUSED)
 	}
 	if flags&(1<<7) != 0 {
 		t.Fatal("unauthorized-domain response must clear RA")
 	}
-	if flags&(1<<10) == 0 {
-		t.Fatal("unauthorized-domain response must set AA")
+	if flags&(1<<10) != 0 {
+		t.Fatal("a server must not claim authority over a name outside its zones")
 	}
 	if flags&(1<<8) == 0 {
 		t.Fatal("unauthorized-domain response must preserve RD")
@@ -77,20 +78,20 @@ func TestHandlePacketKeepsUnsupportedAllowedAQueryAsNoData(t *testing.T) {
 	}
 }
 
-func TestSafeHandlePacketPreservesRequestParsingWithoutFallback(t *testing.T) {
+func TestHandleQueryPreservesRequestParsingWithoutFallback(t *testing.T) {
 	server := &Server{
 		domainMatcher: domainMatcher.New([]string{"vpn.example.com"}, 3),
 	}
 	request := append(buildTestDNSQuery(0x6262, "example.org", Enums.DNS_RECORD_TYPE_A), 0)
 
-	response := server.safeHandlePacket(request)
+	response := server.HandleQuery(netip.AddrPort{}, request, 0, false)
 	if response == nil {
 		t.Fatal("expected DNS response for request with trailing data, got nil")
 	}
 
 	flags := binary.BigEndian.Uint16(response[2:4])
-	if got := flags & 0x000F; got != Enums.DNSR_CODE_NAME_ERROR {
-		t.Fatalf("unexpected rcode: got=%d want=%d", got, Enums.DNSR_CODE_NAME_ERROR)
+	if got := flags & 0x000F; got != Enums.DNSR_CODE_REFUSED {
+		t.Fatalf("unexpected rcode: got=%d want=%d", got, Enums.DNSR_CODE_REFUSED)
 	}
 }
 
