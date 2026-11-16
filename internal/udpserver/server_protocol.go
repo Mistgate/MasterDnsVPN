@@ -20,13 +20,14 @@ const (
 	maxInitCache = 1024
 	// maxInitUDPAnswers bounds how often one INIT is answered over UDP with its
 	// cached ACCEPT. A client retries and races the same INIT a handful of
-	// times; a captured INIT replayed from a spoofed source would otherwise be
-	// answered for the whole 120 s window. An ACCEPT is longer than its INIT
+	// times (three racing queries in each of three attempts); a captured INIT
+	// replayed from a spoofed source would otherwise be answered for the whole
+	// 120 s window. An ACCEPT is longer than its INIT
 	// (the question is echoed in both, the ACCEPT adds its own record), so the
 	// worst a captured INIT can reflect is maxInitUDPAnswers answers of about
 	// 1.5 times the INIT each. TCP cannot be spoofed and has its own, larger
 	// bound.
-	maxInitUDPAnswers = 6
+	maxInitUDPAnswers = 9
 	maxInitTCPAnswers = 16
 )
 

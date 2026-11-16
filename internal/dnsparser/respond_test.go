@@ -3,6 +3,7 @@ package dnsparser
 import (
 	"bytes"
 	"encoding/binary"
+	baseCodec "masterdnsvpn-go/internal/basecodec"
 	"testing"
 
 	Enums "masterdnsvpn-go/internal/enums"
@@ -194,4 +195,53 @@ func TestVPNResponseUsesOnePointerPerRecordAndFitsTheAnnouncedSize(t *testing.T)
 	if err != nil || !bytes.Equal(got, frame) {
 		t.Fatalf("the frame did not survive the TXT chunking: %v", err)
 	}
+}
+
+// TestPayloadShareOfAFullExchange computes what a full-size exchange carries for
+// a 13-character zone: the upstream frame that just fits a name, and the largest
+// downstream payload that fits a resolver's EDNS size of 1232 behind the
+// question that frame came in. The frame overhead is 1 session id, 4 counter,
+// 16 tag and 7 bytes of inner STREAM_DATA header.
+func TestPayloadShareOfAFullExchange(t *testing.T) {
+	const frameOverhead = 1 + 4 + 16 + 7
+	const zone = "v.example.com"
+	if len(zone) != 13 {
+		t.Fatal("the zone must have 13 characters")
+	}
+	maxChars := CalculateMaxEncodedQNameChars(zone)
+	upFrame := maxChars * 7 / 11 // base36: 7 bytes make 11 characters
+	var query []byte
+	for ; upFrame > 0; upFrame-- {
+		wire := bytes.Repeat([]byte{0xA7}, upFrame)
+		candidate, err := BuildTunnelTXTQuestionPacket(zone, encodeLowerBase36ForTest(wire), Enums.DNS_RECORD_TYPE_TXT, 1232)
+		if err == nil {
+			query = candidate
+			break
+		}
+	}
+	upPayload := upFrame - frameOverhead
+	ipUDP := 28
+	t.Logf("upstream: frame %d bytes, payload %d (%.0f%% of the frame), DNS query %d bytes, IP packet %d bytes, payload %.0f%% of the packet",
+		upFrame, upPayload, 100*float64(upPayload)/float64(upFrame), len(query), len(query)+ipUDP, 100*float64(upPayload)/float64(len(query)+ipUDP))
+	downPayload := 0
+	var downResponse int
+	for payload := 1; payload < 2000; payload++ {
+		response, err := BuildVPNResponsePayload(query, bytes.Repeat([]byte{0x5A}, payload+frameOverhead), false)
+		if err != nil || len(response) > 1232 {
+			break
+		}
+		downPayload, downResponse = payload, len(response)
+	}
+	t.Logf("downstream behind that question: payload %d, DNS answer %d bytes, IP packet %d bytes, payload %.0f%% of the packet",
+		downPayload, downResponse, downResponse+ipUDP, 100*float64(downPayload)/float64(downResponse+ipUDP))
+	if upPayload != 122 {
+		t.Errorf("upstream payload %d, want 122", upPayload)
+	}
+	if downPayload < 800 {
+		t.Errorf("downstream payload %d is too small for an EDNS size of 1232", downPayload)
+	}
+}
+
+func encodeLowerBase36ForTest(data []byte) []byte {
+	return baseCodec.EncodeToBytes(data)
 }

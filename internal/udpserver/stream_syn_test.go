@@ -12,6 +12,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,13 +22,15 @@ import (
 	VpnProto "masterdnsvpn-go/internal/vpnproto"
 )
 
+// testNetConn is a connection double. closed is atomic: the server closes a
+// late dial result from its own goroutine while the test polls the flag.
 type testNetConn struct {
-	closed bool
+	closed atomic.Bool
 }
 
 func (t *testNetConn) Read(_ []byte) (int, error)         { return 0, io.EOF }
 func (t *testNetConn) Write(p []byte) (int, error)        { return len(p), nil }
-func (t *testNetConn) Close() error                       { t.closed = true; return nil }
+func (t *testNetConn) Close() error                       { t.closed.Store(true); return nil }
 func (t *testNetConn) LocalAddr() net.Addr                { return testAddr("local") }
 func (t *testNetConn) RemoteAddr() net.Addr               { return testAddr("remote") }
 func (t *testNetConn) SetDeadline(_ time.Time) error      { return nil }
@@ -38,34 +41,6 @@ type testAddr string
 
 func (a testAddr) Network() string { return "tcp" }
 func (a testAddr) String() string  { return string(a) }
-
-type scriptedSOCKS5Conn struct {
-	testNetConn
-	readBufs       [][]byte
-	readIndex      int
-	writes         [][]byte
-	deadlineActive bool
-}
-
-func (c *scriptedSOCKS5Conn) Read(p []byte) (int, error) {
-	if c.readIndex >= len(c.readBufs) {
-		return 0, io.EOF
-	}
-	chunk := c.readBufs[c.readIndex]
-	c.readIndex++
-	copy(p, chunk)
-	return len(chunk), nil
-}
-
-func (c *scriptedSOCKS5Conn) Write(p []byte) (int, error) {
-	c.writes = append(c.writes, append([]byte(nil), p...))
-	return len(p), nil
-}
-
-func (c *scriptedSOCKS5Conn) SetDeadline(t time.Time) error {
-	c.deadlineActive = !t.IsZero()
-	return nil
-}
 
 func newTestServerForStreamSyn(protocol string) *Server {
 	return &Server{
@@ -210,7 +185,7 @@ func TestProcessDeferredStreamSynDoesNotAttachAfterCancellation(t *testing.T) {
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if conn.closed {
+		if conn.closed.Load() {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -348,7 +323,7 @@ func TestProcessDeferredSOCKS5SynDoesNotAttachAfterCancellation(t *testing.T) {
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if conn.closed {
+		if conn.closed.Load() {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -793,7 +768,7 @@ func TestProcessDeferredStreamSynIgnoresLateDialCompletionAfterSessionClose(t *t
 	if upstream != nil {
 		t.Fatal("expected no upstream connection to be attached after session close")
 	}
-	if !conn.closed {
+	if !conn.closed.Load() {
 		t.Fatal("expected late dialed connection to be closed")
 	}
 

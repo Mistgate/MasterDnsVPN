@@ -2448,7 +2448,10 @@ func (a *ARQ) retransmitPriorityKinds(jobs []rtxJob) []bool {
 		frontBudget = len(jobs)
 	}
 
+	// sndNxt moves under mu (ioLoop); checkRetransmits has released mu by now.
+	a.mu.RLock()
 	sndNxt := a.sndNxt
+	a.mu.RUnlock()
 	bestIdx := make([]int, 0, frontBudget)
 	bestDist := make([]uint16, 0, frontBudget)
 

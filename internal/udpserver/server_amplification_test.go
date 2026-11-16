@@ -3,6 +3,7 @@ package udpserver
 import (
 	"crypto/rand"
 	"encoding/binary"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -238,4 +239,73 @@ func seedQueries(t testing.TB) [][]byte {
 		seeds = append(seeds, tunnelQueryEDNS(t, randomBytes(security.SessionInitSize), edns), tunnelQueryEDNS(t, randomBytes(80), edns))
 	}
 	return seeds
+}
+
+// FuzzHandleQueryWithSession feeds mutated queries to a server that has a live
+// session: frames of the session with flipped bytes, truncated frames, probes.
+// Nothing may panic and no answer may exceed 64 KiB.
+func FuzzHandleQueryWithSession(f *testing.F) {
+	server, credential := zoneTestServer(f)
+	cipher, _ := sessionFor(f, server, credential)
+	for _, edns := range []uint16{0, 1232, 4096} {
+		f.Add(frameQuery(f, cipher, Enums.PACKET_PING, []byte("PING"), edns))
+		f.Add(frameQuery(f, cipher, Enums.PACKET_STREAM_DATA, []byte("data"), edns))
+		f.Add(frameQuery(f, cipher, Enums.PACKET_SOCKS5_SYN, []byte{3, 4, 'a', '.', 't', 'x', 0, 80}, edns))
+		f.Add(frameQuery(f, cipher, Enums.PACKET_DNS_QUERY_REQ, []byte{1, 2, 3}, edns))
+		f.Add(frameQuery(f, cipher, Enums.PACKET_PACKED_CONTROL_BLOCKS, make([]byte, 14), edns))
+	}
+	f.Fuzz(func(t *testing.T, packet []byte) {
+		if len(packet) > 4096 {
+			return
+		}
+		for _, tcp := range []bool{false, true} {
+			if response := server.HandleQuery(resolverA, packet, 0, tcp); len(response) > maxTCPMessage {
+				t.Fatalf("answer of %d bytes", len(response))
+			}
+		}
+	})
+}
+
+// Garbage from many sources must not grow any table without bound.
+func TestGarbageDoesNotGrowServerStateWithoutBound(t *testing.T) {
+	if testing.Short() {
+		t.Skip("memory measurement")
+	}
+	server, credential := zoneTestServer(t)
+	sessionFor(t, server, credential)
+	before := heapInUse()
+	for i := 0; i < 120000; i++ {
+		src := netip.AddrPortFrom(netip.AddrFrom4([4]byte{byte(i >> 16), byte(i >> 8), byte(i), 7}), 5300)
+		var packet []byte
+		switch i % 4 {
+		case 0:
+			packet = dnsQuery(t, "www.example.org", Enums.DNS_RECORD_TYPE_A, 1232)
+		case 1:
+			packet = tunnelQueryEDNS(t, randomBytes(60+i%90), 1232)
+		case 2:
+			packet = tunnelQueryEDNS(t, randomBytes(security.SessionInitSize), 1232)
+		default:
+			packet = dnsQuery(t, "_mgchk-abcdefgh.example.com", Enums.DNS_RECORD_TYPE_TXT, 4096)
+		}
+		if response := server.HandleQuery(src, packet, 0, false); len(response) > len(packet) {
+			t.Fatalf("answer of %d bytes to a query of %d", len(response), len(packet))
+		}
+	}
+	grown := int64(heapInUse()) - int64(before)
+	server.sourceBudget.mu.Lock()
+	buckets := len(server.sourceBudget.buckets)
+	server.sourceBudget.mu.Unlock()
+	server.protocolMu.Lock()
+	cached := len(server.initCache)
+	server.protocolMu.Unlock()
+	t.Logf("after 120000 garbage queries from 120000 networks: heap %+d KiB, %d source buckets, %d cached ACCEPTs", grown>>10, buckets, cached)
+	if buckets > maxBudgetBuckets {
+		t.Fatalf("%d source buckets, the cap is %d", buckets, maxBudgetBuckets)
+	}
+	if cached > 1 {
+		t.Fatalf("%d cached ACCEPTs: garbage must not create INIT state", cached)
+	}
+	if grown > 16<<20 {
+		t.Fatalf("heap grew by %d MiB", grown>>20)
+	}
 }

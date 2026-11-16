@@ -112,6 +112,7 @@ func (s *Server) queueSessionPacket(sessionID uint8, packet VpnProto.Packet) boo
 func (s *Server) streamARQConfig() arq.Config {
 	return arq.Config{
 		WindowSize:                  s.cfg.ARQWindowSize,
+		InboundQueueSize:            inboundQueueSize(max(s.cfg.ARQWindowSize, s.cfg.ClientMaxARQWindowSize)),
 		RTO:                         s.cfg.ARQInitialRTOSeconds,
 		MaxRTO:                      s.cfg.ARQMaxRTOSeconds,
 		EnableControlReliability:    true,
@@ -560,4 +561,11 @@ func buildPreSessionPacketTypes() [256]bool {
 	values[Enums.PACKET_MTU_UP_REQ] = true
 	values[Enums.PACKET_MTU_DOWN_REQ] = true
 	return values
+}
+
+// inboundQueueSize is the length of the queue of received segments of a stream.
+// The peer has at most one window of segments in flight, so a little more than
+// that is enough; the ARQ default (four windows) costs 64 KiB per stream.
+func inboundQueueSize(window int) int {
+	return max(window+window/4, 64)
 }

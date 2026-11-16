@@ -54,6 +54,7 @@ type Server struct {
 	dnsUpstreamServers      []string
 	dnsUpstreamBufferPool   sync.Pool
 	hooks                   atomic.Pointer[Hooks]
+	started                 atomic.Bool
 	zone                    *zoneResponder
 	sourceBudget            *sourceBudget
 	tcpLimiter              *tcpLimiter
@@ -306,7 +307,9 @@ func splitDeferredSessionPools(totalWorkers int, totalQueue int) (dnsWorkers int
 // targets and resolve tunneled DNS. It stops with ctx. A host that owns its
 // sockets calls Start once and feeds HandleQuery.
 func (s *Server) Start(ctx context.Context) {
-	_ = s.startBackground(ctx)
+	if s.started.CompareAndSwap(false, true) {
+		_ = s.startBackground(ctx)
+	}
 }
 
 // startBackground starts what Start documents and returns a channel that is
