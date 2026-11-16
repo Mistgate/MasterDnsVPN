@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -122,6 +123,20 @@ type ClientConfig struct {
 	ARQTerminalAckWaitTimeoutSec          float64           `toml:"ARQ_TERMINAL_ACK_WAIT_TIMEOUT_SECONDS"`
 	Resolvers                             []ResolverAddress `toml:"-"`
 	ResolverMap                           map[string]int    `toml:"-"`
+
+	// LivenessTimeoutSeconds is how long a session may get no authenticated frame
+	// from the server before the client starts a new one (0: 90 s).
+	LivenessTimeoutSeconds float64 `toml:"-"`
+	// LibraryMode is the embedding API of the fork (package mgdns): the client
+	// opens no local listener (SOCKS, DNS, console), reads and writes no file,
+	// and hands every outgoing socket to Control.
+	LibraryMode bool `toml:"-"`
+	// Control is called for every socket the client opens to a resolver, before
+	// it is bound or connected, so the host can keep it out of its own tunnel.
+	Control func(network, address string, c syscall.RawConn) error `toml:"-"`
+	// RankedSave receives the best resolvers whenever the ranking changes; a
+	// library host persists them instead of the client writing a resolvers file.
+	RankedSave func(ranked []ResolverAddress) `toml:"-"`
 }
 
 type ClientConfigOverrides struct {
@@ -196,7 +211,7 @@ func defaultClientConfig() ClientConfig {
 		PingWarmThresholdSeconds:              8.0,
 		PingCoolThresholdSeconds:              20.0,
 		PingColdThresholdSeconds:              30.0,
-		RXChannelSize:                         4096,
+		RXChannelSize:                         512,
 		DNSResponseFragmentTimeoutSeconds:     60.0,
 		SOCKSUDPAssociateReadTimeoutSeconds:   30.0,
 		ClientTerminalStreamRetentionSeconds:  45.0,
@@ -345,6 +360,12 @@ func LoadClientConfigFromJSONBase64WithOverrides(encoded string, overrides Clien
 	return finalizeClientConfig(cfg)
 }
 
+// FinalizeClientConfig validates and completes a ClientConfig that was built in
+// code (see LibraryMode) the way a loaded configuration file is.
+func FinalizeClientConfig(cfg ClientConfig) (ClientConfig, error) {
+	return finalizeClientConfig(cfg)
+}
+
 func finalizeClientConfig(cfg ClientConfig) (ClientConfig, error) {
 	cfg.ProtocolType = strings.ToUpper(strings.TrimSpace(cfg.ProtocolType))
 	cfg.LogLevel = strings.TrimSpace(cfg.LogLevel)
@@ -464,7 +485,7 @@ func finalizeClientConfig(cfg ClientConfig) (ClientConfig, error) {
 	cfg.PingWarmThresholdSeconds = clampFloat(defaultFloatAtMostZero(cfg.PingWarmThresholdSeconds, 8.0), 0.1, 600.0)
 	cfg.PingCoolThresholdSeconds = clampFloat(defaultFloatAtMostZero(cfg.PingCoolThresholdSeconds, 20.0), cfg.PingWarmThresholdSeconds, 1800.0)
 	cfg.PingColdThresholdSeconds = clampFloat(defaultFloatAtMostZero(cfg.PingColdThresholdSeconds, 30.0), cfg.PingCoolThresholdSeconds, 3600.0)
-	cfg.RXChannelSize = clampInt(defaultIntBelow(cfg.RXChannelSize, 1, 4096), 64, 65536)
+	cfg.RXChannelSize = clampInt(defaultIntBelow(cfg.RXChannelSize, 1, 512), 64, 65536)
 	cfg.DNSResponseFragmentTimeoutSeconds = clampFloat(defaultFloatAtMostZero(cfg.DNSResponseFragmentTimeoutSeconds, 60.0), 1.0, 600.0)
 	cfg.SOCKSUDPAssociateReadTimeoutSeconds = clampFloat(defaultFloatAtMostZero(cfg.SOCKSUDPAssociateReadTimeoutSeconds, 30.0), 1.0, 3600.0)
 	cfg.ClientTerminalStreamRetentionSeconds = clampFloat(defaultFloatAtMostZero(cfg.ClientTerminalStreamRetentionSeconds, 45.0), 1.0, 3600.0)
@@ -490,6 +511,20 @@ func finalizeClientConfig(cfg ClientConfig) (ClientConfig, error) {
 	}
 
 	cfg.ResolversFilePath = strings.TrimSpace(cfg.ResolversFilePath)
+
+	if cfg.LibraryMode {
+		// A library host passes the resolvers as numbers: no file is read.
+		if len(cfg.Resolvers) == 0 {
+			return cfg, fmt.Errorf("at least one resolver is required")
+		}
+		cfg.ResolverMap = make(map[string]int, len(cfg.Resolvers))
+		for _, resolver := range cfg.Resolvers {
+			if _, seen := cfg.ResolverMap[resolver.IP]; !seen {
+				cfg.ResolverMap[resolver.IP] = resolver.Port
+			}
+		}
+		return cfg, nil
+	}
 
 	resolvers, resolverMap, err := LoadClientResolvers(cfg.ResolversPath())
 	if err != nil {
@@ -679,7 +714,7 @@ func (c ClientConfig) EffectiveDNSResponseFragmentStoreCap() int {
 func (c ClientConfig) EffectiveRXChannelSize() int {
 	maxDup := max(max(c.PacketDuplicationCount, c.SetupPacketDuplicationCount), 1)
 	workerBudget := max(c.RX_TX_Workers+c.TunnelProcessWorkers, 2)
-	recommended := clampInt(workerBudget*c.MaxPacketsPerBatch*maxDup*16, 1024, 32768)
+	recommended := clampInt(workerBudget*c.MaxPacketsPerBatch*maxDup*16, 256, 1024)
 	return max(c.RXChannelSize, recommended)
 }
 

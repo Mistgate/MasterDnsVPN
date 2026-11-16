@@ -15,7 +15,7 @@ import (
 	"testing"
 )
 
-func TestLoadClientResolversSupportsIPCIDRAndPort(t *testing.T) {
+func TestLoadClientResolversSupportsIPAndPortAndIgnoresSubnets(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "client_resolvers.txt")
 
@@ -34,8 +34,8 @@ func TestLoadClientResolversSupportsIPCIDRAndPort(t *testing.T) {
 		t.Fatalf("LoadClientResolvers returned error: %v", err)
 	}
 
-	if len(resolvers) != 5 {
-		t.Fatalf("unexpected resolver count: got=%d want=%d", len(resolvers), 5)
+	if len(resolvers) != 3 {
+		t.Fatalf("unexpected resolver count: got=%d want=%d (the subnet must not be expanded)", len(resolvers), 3)
 	}
 	if resolverMap["8.8.8.8"] != 53 {
 		t.Fatalf("unexpected default port: got=%d want=%d", resolverMap["8.8.8.8"], 53)
@@ -43,15 +43,15 @@ func TestLoadClientResolversSupportsIPCIDRAndPort(t *testing.T) {
 	if resolverMap["1.1.1.1"] != 5353 {
 		t.Fatalf("unexpected custom port: got=%d want=%d", resolverMap["1.1.1.1"], 5353)
 	}
-	if resolverMap["192.168.10.1"] != 5300 || resolverMap["192.168.10.2"] != 5300 {
-		t.Fatalf("unexpected cidr expansion map: %+v", resolverMap)
+	if _, expanded := resolverMap["192.168.10.1"]; expanded {
+		t.Fatalf("a subnet was expanded into addresses: %+v", resolverMap)
 	}
 	if resolverMap["2001:db8::1"] != 5400 {
 		t.Fatalf("unexpected IPv6 port: got=%d want=%d", resolverMap["2001:db8::1"], 5400)
 	}
 }
 
-func TestLoadClientResolversRejectsHugeCIDR(t *testing.T) {
+func TestLoadClientResolversRejectsSubnets(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "client_resolvers.txt")
 
@@ -155,7 +155,7 @@ func TestLoadClientResolversPreservesFileLineOrder(t *testing.T) {
 	}
 }
 
-func TestUpdateResolversFileWithRankedPreservesCommentsAndSubnets(t *testing.T) {
+func TestUpdateResolversFileWithRankedPreservesComments(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "client_resolvers.txt")
 
@@ -163,8 +163,9 @@ func TestUpdateResolversFileWithRankedPreservesCommentsAndSubnets(t *testing.T) 
 # Cloudflare
 1.1.1.1
 
-# Home LAN Subnet
-192.168.10.0/30:5300
+# Home LAN
+192.168.10.1:5300
+192.168.10.2:5300
 `
 	if err := os.WriteFile(path, []byte(initialContent), 0o644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
@@ -196,8 +197,8 @@ func TestUpdateResolversFileWithRankedPreservesCommentsAndSubnets(t *testing.T) 
 	if !strings.Contains(updatedStr, "# Custom user comments") {
 		t.Error("user comment was lost")
 	}
-	if !strings.Contains(updatedStr, "192.168.10.0/30:5300") {
-		t.Error("user subnet was lost")
+	if !strings.Contains(updatedStr, "192.168.10.1:5300") {
+		t.Error("user resolver was lost")
 	}
 
 	// 2. Test that loading the file puts ranked resolvers first and deduplicates
@@ -216,7 +217,7 @@ func TestUpdateResolversFileWithRankedPreservesCommentsAndSubnets(t *testing.T) 
 		t.Errorf("expected 2nd resolver to be 1.1.1.1:53, got %+v", loaded[1])
 	}
 	if loaded[2].IP != "192.168.10.1" || loaded[2].Port != 5300 {
-		t.Errorf("expected remaining configured subnet host 192.168.10.1:5300, got %+v", loaded[2])
+		t.Errorf("expected remaining configured resolver 192.168.10.1:5300, got %+v", loaded[2])
 	}
 
 	// 3. Test updating again replaces the existing block rather than duplicating it
@@ -518,4 +519,3 @@ func TestUpdateResolversFileWithRanked_PreservesFileModeAndFollowsSymlink(t *tes
 		t.Errorf("expected %s to remain a symlink, but it was replaced by a regular file", symlinkPath)
 	}
 }
-

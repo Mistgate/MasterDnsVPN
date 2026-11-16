@@ -71,12 +71,15 @@ type Client struct {
 	streamResolverFailoverCooldown        time.Duration
 
 	// Session States
-	sessionID          uint8
-	credential         security.Credential
-	sessionHandshake   *security.ClientHandshake
-	sessionCipher      *security.SessionCipher
-	responseMode       uint8
-	sessionReady       bool
+	sessionID        uint8
+	credential       security.Credential
+	sessionHandshake *security.ClientHandshake
+	sessionCipher    *security.SessionCipher
+	responseMode     uint8
+	sessionReady     bool
+	// sessionReadyFlag mirrors sessionReady for readers outside the client's
+	// own goroutines (SessionReady).
+	sessionReadyFlag   atomic.Bool
 	initStateMu        sync.Mutex
 	sessionInitReady   bool
 	sessionInitBase64  bool
@@ -334,12 +337,23 @@ func New(cfg config.ClientConfig, log *logger.Logger, credential security.Creden
 	if maxRanked < 32 {
 		maxRanked = 32
 	}
+	rankedConfig := RankedPersistenceConfig{
+		Enabled:       cfg.AutoSaveRankedResolvers,
+		ResolversPath: cfg.ResolversPath(),
+		MaxRanked:     maxRanked,
+	}
+	saveRanked := config.UpdateResolversFileWithRanked
+	if cfg.LibraryMode {
+		// A library host keeps the ranking itself: no file, a callback.
+		rankedConfig.Enabled = cfg.RankedSave != nil
+		rankedConfig.ResolversPath = "callback"
+		saveRanked = func(_ string, ranked []config.ResolverAddress) error {
+			cfg.RankedSave(ranked)
+			return nil
+		}
+	}
 	c.rankedWriter = newRankedPersistenceWriter(
-		RankedPersistenceConfig{
-			Enabled:       cfg.AutoSaveRankedResolvers,
-			ResolversPath: cfg.ResolversPath(),
-			MaxRanked:     maxRanked,
-		},
+		rankedConfig,
 		c.log,
 		func(maxCount int) []config.ResolverAddress {
 			if c.pool != nil {
@@ -350,7 +364,7 @@ func New(cfg config.ClientConfig, log *logger.Logger, credential security.Creden
 			}
 			return nil
 		},
-		config.UpdateResolversFileWithRanked,
+		saveRanked,
 	)
 
 	if c.pool != nil {
@@ -520,7 +534,14 @@ func (c *Client) Run(ctx context.Context) error {
 // sessionLivenessTimeout is how long an established session may receive no
 // authenticated frame, not even a PONG, before the client starts a new one.
 // Pings run at least every PING_COLD_INTERVAL_SECONDS (15 s by default).
-const sessionLivenessTimeout = 90 * time.Second
+const defaultSessionLivenessTimeout = 90 * time.Second
+
+func (c *Client) livenessTimeout() time.Duration {
+	if c.cfg.LivenessTimeoutSeconds > 0 {
+		return time.Duration(c.cfg.LivenessTimeoutSeconds * float64(time.Second))
+	}
+	return defaultSessionLivenessTimeout
+}
 
 // checkSessionHealth restarts the session when the downlink has gone silent
 // (server restarted, credential revoked, session expired) or when a frame
@@ -534,7 +555,7 @@ func (c *Client) checkSessionHealth() {
 		return
 	}
 	last := c.lastAuthRxUnixNano.Load()
-	if last != 0 && time.Since(time.Unix(0, last)) > sessionLivenessTimeout {
+	if last != 0 && time.Since(time.Unix(0, last)) > c.livenessTimeout() {
 		c.requestSessionRestart("no authenticated downlink frame")
 	}
 }

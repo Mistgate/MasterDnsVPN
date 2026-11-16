@@ -54,7 +54,7 @@ func TestSilentDownlinkRestartsTheSession(t *testing.T) {
 		t.Fatal("a session that just received a frame was restarted")
 	}
 
-	c.lastAuthRxUnixNano.Store(time.Now().Add(-(sessionLivenessTimeout + time.Second)).UnixNano())
+	c.lastAuthRxUnixNano.Store(time.Now().Add(-(defaultSessionLivenessTimeout + time.Second)).UnixNano())
 	c.checkSessionHealth()
 	if !c.runtimeResetPending.Load() {
 		t.Fatal("a session whose downlink has been silent for longer than the liveness timeout was kept")

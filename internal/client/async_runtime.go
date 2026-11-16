@@ -243,6 +243,7 @@ func (c *Client) resetSessionState() {
 		return
 	}
 	c.sessionReady = false
+	c.sessionReadyFlag.Store(false)
 	c.sessionID = 0
 	c.responseMode = 0
 	c.clearSessionInitBusyUntil()
@@ -331,15 +332,17 @@ func (c *Client) StartAsyncRuntime(parentCtx context.Context) error {
 	c.log.Infof("\U0001F4E1 <cyan>Async Runtime Initialized: <green>%d RX/TX Workers</green>, <green>%d Processors</green></cyan>",
 		c.tunnelRX_TX_Workers, c.tunnelProcessWorkers)
 
-	// Start TCP/SOCKS Proxy Listener
-	c.tcpListener = NewTCPListener(c, c.cfg.ProtocolType)
-	if err := c.tcpListener.Start(runtimeCtx, c.cfg.ListenIP, c.cfg.ListenPort); err != nil {
-		c.log.Errorf("<red>❌ Failed to start %s proxy: %v</red>", c.cfg.ProtocolType, err)
-		return err
+	// Start TCP/SOCKS Proxy Listener (a library host dials streams itself)
+	if !c.cfg.LibraryMode {
+		c.tcpListener = NewTCPListener(c, c.cfg.ProtocolType)
+		if err := c.tcpListener.Start(runtimeCtx, c.cfg.ListenIP, c.cfg.ListenPort); err != nil {
+			c.log.Errorf("<red>❌ Failed to start %s proxy: %v</red>", c.cfg.ProtocolType, err)
+			return err
+		}
 	}
 
 	// Start DNS Listener if enabled
-	if c.cfg.LocalDNSEnabled {
+	if c.cfg.LocalDNSEnabled && !c.cfg.LibraryMode {
 		c.dnsListener = NewDNSListener(c)
 		if err := c.dnsListener.Start(runtimeCtx, c.cfg.LocalDNSIP, c.cfg.LocalDNSPort); err != nil {
 			c.log.Errorf("<red>❌ Failed to start DNS resolver: %v</red>", err)

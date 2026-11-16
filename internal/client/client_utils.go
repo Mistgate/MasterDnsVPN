@@ -185,11 +185,13 @@ func (c *Client) bumpStreamSetVersion() {
 	c.streamSetVersion.Add(1)
 }
 
+// SessionReady reports whether a session is established. It may be called from
+// any goroutine.
 func (c *Client) SessionReady() bool {
 	if c == nil {
 		return false
 	}
-	return c.sessionReady
+	return c.sessionReadyFlag.Load()
 }
 
 func (c *Client) SessionID() uint8 {

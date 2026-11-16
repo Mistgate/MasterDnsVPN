@@ -43,8 +43,11 @@ const (
 type Stream_client struct {
 	client *Client
 
-	StreamID           uint16
-	LocalSocksVersion  byte
+	StreamID          uint16
+	LocalSocksVersion byte
+	// libResult, when set, receives the SOCKS reply code of the connect instead
+	// of the reply being written to NetConn (streams opened by OpenStream).
+	libResult          chan byte
 	NetConn            net.Conn
 	CreateTime         time.Time
 	LastActivityTime   time.Time
@@ -134,6 +137,7 @@ func (c *Client) new_stream(streamID uint16, conn net.Conn, targetPayload []byte
 
 	arqCfg := arq.Config{
 		WindowSize:                  c.cfg.ARQWindowSize,
+		InboundQueueSize:            max(c.cfg.ARQWindowSize+c.cfg.ARQWindowSize/4, 64),
 		RTO:                         c.cfg.ARQInitialRTOSeconds,
 		MaxRTO:                      c.cfg.ARQMaxRTOSeconds,
 		StartPaused:                 conn != nil && streamID != 0 && (c.cfg.ProtocolType == "SOCKS5" || c.cfg.ProtocolType == "TCP"),

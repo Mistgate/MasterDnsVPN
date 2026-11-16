@@ -17,11 +17,10 @@ import (
 	"strings"
 	"syscall"
 
+	mgdns "masterdnsvpn-go"
 	"masterdnsvpn-go/internal/config"
 	"masterdnsvpn-go/internal/logger"
 	"masterdnsvpn-go/internal/runtimepath"
-	"masterdnsvpn-go/internal/security"
-	UDPServer "masterdnsvpn-go/internal/udpserver"
 	"masterdnsvpn-go/internal/version"
 )
 
@@ -108,7 +107,7 @@ func main() {
 
 	log.Infof("\U0001F680 <magenta>MasterDnsVPN Server starting ...</magenta>")
 
-	credential, err := security.ParseCredential(cfg.DeviceCredential)
+	credential, err := mgdns.ParseCredential(cfg.DeviceCredential)
 	if err != nil {
 		log.Errorf("\u274C <red>Device Credential Setup Failed</red> <magenta>|</magenta> <cyan>%v</cyan>", err)
 		if !*nowaitFlag {
@@ -116,12 +115,12 @@ func main() {
 		}
 		os.Exit(1)
 	}
-	index, err := security.NewMemoryCredentialIndex([]security.Credential{credential})
+	index, err := mgdns.NewCredentialIndex(credential)
 	if err != nil {
 		log.Errorf("Device credential index setup failed: %v", err)
 		os.Exit(1)
 	}
-	srv := UDPServer.New(cfg, log)
+	srv := mgdns.NewServerFromConfig(cfg, log)
 	srv.SetCredentialIndex(index)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -142,10 +141,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	log.Infof("Device credential: %s (ChaCha20-Poly1305)", credential.ID)
+	log.Infof("Device credential: %s (ChaCha20-Poly1305)", credential.ID())
 	log.Debugf("\u25B6\uFE0F <green>Starting UDP Server...</green>")
 
-	if err := srv.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+	if err := srv.Serve(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		log.Errorf("\U0001F4A5 <red>Server Stopped Unexpectedly, <cyan>%v</cyan></red>", err)
 		os.Exit(1)
 	}

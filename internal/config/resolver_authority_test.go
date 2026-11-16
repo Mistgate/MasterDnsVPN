@@ -10,7 +10,7 @@ import (
 
 func TestRankedResolversRespectUserAuthority(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "resolvers.txt")
-	content := AutoRankedHeaderMarker + "\n8.8.8.8\n1.1.1.1\n192.0.2.2:5300\n" + AutoRankedFooterMarker + "\n# user's list\n1.1.1.1:5353\n192.0.2.0/30:5300\n"
+	content := AutoRankedHeaderMarker + "\n8.8.8.8\n1.1.1.1\n192.0.2.2:5300\n" + AutoRankedFooterMarker + "\n# user's list\n1.1.1.1:5353\n192.0.2.1:5300\n192.0.2.2:5300\n"
 	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestRankedResolversRespectUserAuthority(t *testing.T) {
 	if strings.Contains(block, "8.8.8.8") || strings.Contains(block, "1.1.1.1") {
 		t.Fatalf("stale ranking retained: %s", block)
 	}
-	if !strings.Contains(string(saved), "# user's list\n1.1.1.1:5353\n192.0.2.0/30:5300") {
+	if !strings.Contains(string(saved), "# user's list\n1.1.1.1:5353\n192.0.2.1:5300\n192.0.2.2:5300") {
 		t.Fatal("user lines changed")
 	}
 	// Removing all entries must not resurrect cached rankings.

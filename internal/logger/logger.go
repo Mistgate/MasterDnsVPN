@@ -97,6 +97,22 @@ func NewWithFile(name, rawLevel, filePath string) *Logger {
 	}
 }
 
+// NewWithWriter returns a logger that writes plain lines to w; a nil w discards
+// them. It never touches the standard output.
+func NewWithWriter(name, rawLevel string, w io.Writer) *Logger {
+	if w == nil {
+		w = io.Discard
+	}
+	appName := "[" + name + "]"
+	return &Logger{
+		name:           name,
+		level:          parseLevel(rawLevel),
+		consoleWriter:  w,
+		appNameText:    appName,
+		appNameColored: appName,
+	}
+}
+
 func parseLevel(raw string) int {
 	switch strings.ToUpper(strings.TrimSpace(raw)) {
 	case "DEBUG":

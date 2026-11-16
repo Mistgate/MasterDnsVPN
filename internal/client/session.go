@@ -175,6 +175,7 @@ func (c *Client) applySessionInitPacket(message []byte, verifyCode [4]byte) erro
 		c.applySessionClientPolicy(sessionAccept.ClientPolicy)
 	}
 	c.sessionReady = true
+	c.sessionReadyFlag.Store(true)
 	c.lastAuthRxUnixNano.Store(time.Now().UnixNano())
 	c.clearSessionInitBusyUntil()
 	c.resetSessionInitStateLocked()

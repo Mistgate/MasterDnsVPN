@@ -22,8 +22,9 @@ import (
 )
 
 const (
-	// RuntimeUDPReadBufferSize defines the maximum size of the UDP read buffer.
-	RuntimeUDPReadBufferSize         = 65535
+	// RuntimeUDPReadBufferSize is the size of the UDP read buffer: an answer is
+	// never larger than the EDNS size this client advertises (4096).
+	RuntimeUDPReadBufferSize         = 4096
 	runtimeUDPMaxMismatchedResponses = 64
 	runtimeUDPDrainGrace             = time.Millisecond
 

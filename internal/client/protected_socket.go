@@ -22,10 +22,16 @@ import (
 )
 
 // protectControl is the net.Dialer / net.ListenConfig Control hook for every
-// upstream UDP socket. When FD_CONTROL_UNIX_SOCKET is set it hands the new
+// upstream UDP socket. A host that embeds the client sets cfg.Control and gets
+// every socket before it is bound or connected (to bind it to a physical
+// interface and keep it out of its own tunnel). When FD_CONTROL_UNIX_SOCKET is
+// set it hands the new
 // socket fd to the protect server before connect/bind, so an Android
 // VpnService host can keep it outside the tunnel. Otherwise it does nothing.
 func (c *Client) protectControl(network, address string, rc syscall.RawConn) error {
+	if control := c.cfg.Control; control != nil {
+		return control(network, address, rc)
+	}
 	path := c.cfg.FDControlUnixSocket
 	if path == "" {
 		return nil

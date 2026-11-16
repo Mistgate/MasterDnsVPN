@@ -441,6 +441,19 @@ func (c *Client) writeSocksConnectResultLocked(s *Stream_client, rep byte) error
 		return errLateSocksResult
 	}
 
+	if s.libResult != nil {
+		select {
+		case s.libResult <- rep:
+		default:
+		}
+		if rep == SOCKS5_REPLY_SUCCESS {
+			s.SetStatus(streamStatusActive)
+		} else {
+			s.SetStatus(streamStatusSocksFailed)
+		}
+		return nil
+	}
+
 	var err error
 	if s.LocalSocksVersion == SOCKS4_VERSION {
 		err = c.sendSocks4Reply(s.NetConn, rep == SOCKS5_REPLY_SUCCESS)
