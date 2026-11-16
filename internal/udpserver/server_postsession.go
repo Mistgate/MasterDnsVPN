@@ -210,7 +210,7 @@ func (s *Server) queueImmediateControlAck(record *sessionRecord, packet VpnProto
 
 	stream, exists := record.getStream(packet.StreamID)
 	if (!exists || stream == nil) && isStreamCreationPacketType(packet.PacketType) {
-		stream = record.getOrCreateStream(packet.StreamID, s.streamARQConfig(record.DownloadCompression), nil, s.log)
+		stream = record.getOrCreateStream(packet.StreamID, s.streamARQConfig(), nil, s.log)
 		exists = stream != nil
 	}
 
@@ -238,7 +238,6 @@ func (s *Server) queueImmediateControlAck(record *sessionRecord, packet VpnProto
 		packet.SequenceNum,
 		packet.FragmentID,
 		packet.TotalFragments,
-		0,
 		0,
 		nil,
 	)
@@ -655,7 +654,6 @@ func (s *Server) handleDNSQueryRequest(vpnPacket VpnProto.Packet, sessionRecord 
 			ctx,
 			vpnPacket.SessionID,
 			vpnPacket.SequenceNum,
-			sessionRecord.DownloadCompression,
 			sessionRecord.DownloadMTUBytes,
 			assembledQuery,
 		)

@@ -14,7 +14,6 @@ import (
 	"strings"
 	"testing"
 
-	"masterdnsvpn-go/internal/compression"
 	Enums "masterdnsvpn-go/internal/enums"
 	VpnProto "masterdnsvpn-go/internal/vpnproto"
 )
@@ -151,14 +150,13 @@ func TestBuildAndExtractVPNResponsePacketCompressed(t *testing.T) {
 
 	payload := bytes.Repeat([]byte("abcdabcdabcdabcd"), 16)
 	response, err := BuildVPNResponsePacket(query, "x.v.example.com", VpnProto.Packet{
-		SessionID:       7,
-		PacketType:      Enums.PACKET_STREAM_DATA,
-		StreamID:        1,
-		SequenceNum:     2,
-		FragmentID:      0,
-		TotalFragments:  1,
-		CompressionType: compression.TypeZLIB,
-		Payload:         payload,
+		SessionID:      7,
+		PacketType:     Enums.PACKET_STREAM_DATA,
+		StreamID:       1,
+		SequenceNum:    2,
+		FragmentID:     0,
+		TotalFragments: 1,
+		Payload:        payload,
 	}, false)
 	if err != nil {
 		t.Fatalf("BuildVPNResponsePacket returned error: %v", err)

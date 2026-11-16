@@ -170,7 +170,6 @@ func (p *PingManager) pingLoop() {
 							0,
 							0,
 							0,
-							0,
 							payload,
 						)
 					}

@@ -19,8 +19,6 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
-
-	"masterdnsvpn-go/internal/compression"
 )
 
 type ClientConfig struct {
@@ -55,9 +53,6 @@ type ClientConfig struct {
 	AutoDisableTimeoutWindowSeconds       float64           `toml:"AUTO_DISABLE_TIMEOUT_WINDOW_SECONDS"`
 	FDControlUnixSocket                   string            `toml:"FD_CONTROL_UNIX_SOCKET"`
 	BaseEncodeData                        bool              `toml:"BASE_ENCODE_DATA"`
-	UploadCompressionType                 int               `toml:"UPLOAD_COMPRESSION_TYPE"`
-	DownloadCompressionType               int               `toml:"DOWNLOAD_COMPRESSION_TYPE"`
-	CompressionMinSize                    int               `toml:"COMPRESSION_MIN_SIZE"`
 	DeviceCredential                      string            `toml:"DEVICE_CREDENTIAL"`
 	MinUploadMTU                          int               `toml:"MIN_UPLOAD_MTU"`
 	MinDownloadMTU                        int               `toml:"MIN_DOWNLOAD_MTU"`
@@ -172,9 +167,6 @@ func defaultClientConfig() ClientConfig {
 		AutoDisableTimeoutWindowSeconds:       30.0,
 		FDControlUnixSocket:                   "",
 		BaseEncodeData:                        false,
-		UploadCompressionType:                 compression.TypeOff,
-		DownloadCompressionType:               compression.TypeOff,
-		CompressionMinSize:                    compression.DefaultMinSize,
 		DeviceCredential:                      "",
 		MinUploadMTU:                          38,
 		MinDownloadMTU:                        100,
@@ -397,16 +389,6 @@ func finalizeClientConfig(cfg ClientConfig) (ClientConfig, error) {
 	cfg.LocalDNSCacheTTLSeconds = defaultFloatAtMostZero(cfg.LocalDNSCacheTTLSeconds, 14400.0)
 	cfg.LocalDNSPendingTimeoutSec = defaultFloatAtMostZero(cfg.LocalDNSPendingTimeoutSec, 300.0)
 	cfg.LocalDNSCacheFlushSec = defaultFloatAtMostZero(cfg.LocalDNSCacheFlushSec, 60.0)
-
-	if cfg.UploadCompressionType < compression.TypeOff || cfg.UploadCompressionType > compression.TypeZLIB {
-		return cfg, fmt.Errorf("invalid UPLOAD_COMPRESSION_TYPE: %d", cfg.UploadCompressionType)
-	}
-
-	if cfg.DownloadCompressionType < compression.TypeOff || cfg.DownloadCompressionType > compression.TypeZLIB {
-		return cfg, fmt.Errorf("invalid DOWNLOAD_COMPRESSION_TYPE: %d", cfg.DownloadCompressionType)
-	}
-
-	cfg.CompressionMinSize = defaultIntBelow(cfg.CompressionMinSize, 100, compression.DefaultMinSize)
 
 	if cfg.ResolverBalancingStrategy < 0 || cfg.ResolverBalancingStrategy > 9 {
 		return cfg, fmt.Errorf("invalid RESOLVER_BALANCING_STRATEGY: %d", cfg.ResolverBalancingStrategy)

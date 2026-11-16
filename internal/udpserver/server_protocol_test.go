@@ -10,7 +10,6 @@ import (
 	"time"
 
 	baseCodec "masterdnsvpn-go/internal/basecodec"
-	"masterdnsvpn-go/internal/compression"
 	"masterdnsvpn-go/internal/config"
 	DnsParser "masterdnsvpn-go/internal/dnsparser"
 	Enums "masterdnsvpn-go/internal/enums"
@@ -21,7 +20,6 @@ import (
 func buildSessionInitQuestion(t *testing.T, credential security.Credential, timestamp uint32, version ...byte) []byte {
 	t.Helper()
 	var parameters [security.InitParametersSize]byte
-	parameters[1] = compression.PackPair(compression.TypeOff, compression.TypeOff)
 	return buildSessionInitQuestionWithParameters(t, credential, timestamp, parameters, protocolTestPrivateKey(t), version...)
 }
 
@@ -56,7 +54,6 @@ func TestSameEphemeralWithDifferentInitTranscriptIsSilentlyRejected(t *testing.T
 	timestamp := uint32(time.Now().Unix())
 	private := protocolTestPrivateKey(t)
 	var parameters [security.InitParametersSize]byte
-	parameters[1] = compression.PackPair(compression.TypeOff, compression.TypeOff)
 
 	firstQuery := buildSessionInitQuestionWithParameters(t, credential, timestamp, parameters, private)
 	firstResponse := server.HandlePacket(firstQuery)
@@ -64,7 +61,7 @@ func TestSameEphemeralWithDifferentInitTranscriptIsSilentlyRejected(t *testing.T
 		t.Fatal("expected first INIT to receive ACCEPT")
 	}
 
-	parameters[2] ^= 1
+	parameters[1] ^= 1
 	changedQuery := buildSessionInitQuestionWithParameters(t, credential, timestamp, parameters, private)
 	changedResponse := server.HandlePacket(changedQuery)
 	if len(changedResponse) != 0 {
@@ -120,7 +117,6 @@ func TestReplayedSessionFrameGetsSmallNoDataAnswer(t *testing.T) {
 	server, credential := newProtocolTestServer(t, cfg, nil)
 
 	var parameters [security.InitParametersSize]byte
-	parameters[1] = compression.PackPair(compression.TypeOff, compression.TypeOff)
 	handshake, initMessage, err := security.NewClientHandshake(credential, parameters, time.Now(), rand.Reader)
 	if err != nil {
 		t.Fatalf("NewClientHandshake failed: %v", err)
@@ -175,7 +171,7 @@ func TestReplayedSessionFrameGetsSmallNoDataAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open PONG failed: %v", err)
 	}
-	firstPacket, err := VpnProto.ParseInflated(firstPlain)
+	firstPacket, err := VpnProto.Parse(firstPlain)
 	if err != nil || firstPacket.PacketType != Enums.PACKET_PONG {
 		t.Fatalf("expected first PING to be handled, got packet=%+v err=%v", firstPacket, err)
 	}
@@ -223,7 +219,7 @@ func TestAuthenticatedProbeCanShareInitLengthAndVersionByte(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenProbeWithCredential failed: %v", err)
 	}
-	packet, err := VpnProto.ParseInflated(probe.Payload)
+	packet, err := VpnProto.Parse(probe.Payload)
 	if err != nil || packet.PacketType != Enums.PACKET_MTU_UP_RES {
 		t.Fatalf("expected MTU_UP_RES, got packet=%+v err=%v", packet, err)
 	}

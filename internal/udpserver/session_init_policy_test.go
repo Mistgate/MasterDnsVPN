@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"masterdnsvpn-go/internal/arq"
-	"masterdnsvpn-go/internal/compression"
 	"masterdnsvpn-go/internal/config"
 	DnsParser "masterdnsvpn-go/internal/dnsparser"
 	Enums "masterdnsvpn-go/internal/enums"
@@ -19,11 +18,11 @@ func TestSessionInitPolicyMTULimitsAreAppliedToServerSession(t *testing.T) {
 	store := newSessionStore(16, 32)
 	payload := make([]byte, sessionInitDataSize)
 	payload[0] = mtuProbeModeRaw
-	binary.BigEndian.PutUint16(payload[2:4], 999)
-	binary.BigEndian.PutUint16(payload[4:6], 9999)
-	copy(payload[6:10], []byte{1, 2, 3, 4})
+	binary.BigEndian.PutUint16(payload[1:3], 999)
+	binary.BigEndian.PutUint16(payload[3:5], 9999)
+	copy(payload[5:9], []byte{1, 2, 3, 4})
 
-	record, reused, err := store.findOrCreate(payload, 0, 0, 10, 150, 2048)
+	record, reused, err := store.findOrCreate(payload, 10, 150, 2048)
 	if err != nil {
 		t.Fatalf("findOrCreate returned error: %v", err)
 	}
@@ -44,9 +43,9 @@ func TestSessionStoreHonorsConfiguredActiveSessionLimit(t *testing.T) {
 
 	payloadA := make([]byte, sessionInitDataSize)
 	payloadA[0] = mtuProbeModeRaw
-	copy(payloadA[6:10], []byte{1, 2, 3, 4})
+	copy(payloadA[5:9], []byte{1, 2, 3, 4})
 
-	record, reused, err := store.findOrCreate(payloadA, 0, 0, 10, 150, 2048)
+	record, reused, err := store.findOrCreate(payloadA, 10, 150, 2048)
 	if err != nil {
 		t.Fatalf("first findOrCreate returned error: %v", err)
 	}
@@ -56,9 +55,9 @@ func TestSessionStoreHonorsConfiguredActiveSessionLimit(t *testing.T) {
 
 	payloadB := make([]byte, sessionInitDataSize)
 	payloadB[0] = mtuProbeModeRaw
-	copy(payloadB[6:10], []byte{5, 6, 7, 8})
+	copy(payloadB[5:9], []byte{5, 6, 7, 8})
 
-	record, reused, err = store.findOrCreate(payloadB, 0, 0, 10, 150, 2048)
+	record, reused, err = store.findOrCreate(payloadB, 10, 150, 2048)
 	if err != ErrSessionTableFull {
 		t.Fatalf("expected ErrSessionTableFull, got record=%v reused=%v err=%v", record != nil, reused, err)
 	}
@@ -75,7 +74,6 @@ func TestHandleSecureSessionInitIncludesServerClientPolicy(t *testing.T) {
 	cfg.ClientMaxPacketsPerBatch = 20
 	cfg.ClientMaxARQWindowSize = 6000
 	cfg.ClientMaxARQDataNackMaxGap = 200
-	cfg.ClientMinCompressionMinSize = 120
 	cfg.ClientMinARQInitialRTOSeconds = 0.25
 
 	s, credential := newProtocolTestServer(t, cfg, nil)
@@ -88,10 +86,9 @@ func TestHandleSecureSessionInitIncludesServerClientPolicy(t *testing.T) {
 	verifyCode := [4]byte{1, 2, 3, 4}
 	var parameters [security.InitParametersSize]byte
 	parameters[0] = mtuProbeModeRaw
-	parameters[1] = compression.PackPair(compression.TypeOff, compression.TypeOff)
-	binary.BigEndian.PutUint16(parameters[2:4], 220)
-	binary.BigEndian.PutUint16(parameters[4:6], 5000)
-	copy(parameters[6:10], verifyCode[:])
+	binary.BigEndian.PutUint16(parameters[1:3], 220)
+	binary.BigEndian.PutUint16(parameters[3:5], 5000)
+	copy(parameters[5:9], verifyCode[:])
 	handshake, initMessage := makeProtocolTestInit(t, credential, parameters)
 	response := callSecureInit(s, query, "x.v.example.com", initMessage)
 	if response == nil {
@@ -145,9 +142,6 @@ func TestHandleSecureSessionInitIncludesServerClientPolicy(t *testing.T) {
 	if accept.ClientPolicy.MaxARQDataNackMaxGap != cfg.ClientMaxARQDataNackMaxGap {
 		t.Fatalf("unexpected max arq data nack gap: got=%d want=%d", accept.ClientPolicy.MaxARQDataNackMaxGap, cfg.ClientMaxARQDataNackMaxGap)
 	}
-	if accept.ClientPolicy.MinCompressionMinSize != cfg.ClientMinCompressionMinSize {
-		t.Fatalf("unexpected min compression size: got=%d want=%d", accept.ClientPolicy.MinCompressionMinSize, cfg.ClientMinCompressionMinSize)
-	}
 	if accept.ClientPolicy.MinARQInitialRTOSeconds < 0.245 || accept.ClientPolicy.MinARQInitialRTOSeconds > 0.255 {
 		t.Fatalf("unexpected min arq initial rto: got=%f", accept.ClientPolicy.MinARQInitialRTOSeconds)
 	}
@@ -164,10 +158,9 @@ func TestHandleSecureSessionInitConcurrentDuplicatesShareAccept(t *testing.T) {
 	}
 	var parameters [security.InitParametersSize]byte
 	parameters[0] = mtuProbeModeRaw
-	parameters[1] = compression.PackPair(compression.TypeOff, compression.TypeOff)
-	binary.BigEndian.PutUint16(parameters[2:4], 120)
-	binary.BigEndian.PutUint16(parameters[4:6], 400)
-	copy(parameters[6:10], []byte{1, 2, 3, 4})
+	binary.BigEndian.PutUint16(parameters[1:3], 120)
+	binary.BigEndian.PutUint16(parameters[3:5], 400)
+	copy(parameters[5:9], []byte{1, 2, 3, 4})
 	handshake, initMessage := makeProtocolTestInit(t, credential, parameters)
 
 	const duplicates = 4
@@ -219,9 +212,9 @@ func TestHandleStreamSynRequestRejectsWhenActiveStreamLimitIsReached(t *testing.
 
 	payload := make([]byte, sessionInitDataSize)
 	payload[0] = mtuProbeModeRaw
-	copy(payload[6:10], []byte{1, 2, 3, 4})
+	copy(payload[5:9], []byte{1, 2, 3, 4})
 
-	record, reused, err := store.findOrCreate(payload, 0, 0, 10, 150, 2048)
+	record, reused, err := store.findOrCreate(payload, 10, 150, 2048)
 	if err != nil {
 		t.Fatalf("findOrCreate returned error: %v", err)
 	}

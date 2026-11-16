@@ -20,84 +20,79 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
-
-	"masterdnsvpn-go/internal/compression"
 )
 
 type ServerConfig struct {
-	ConfigDir                         string   `toml:"-"`
-	ConfigPath                        string   `toml:"-"`
-	ProtocolType                      string   `toml:"PROTOCOL_TYPE"`
-	UDPHost                           string   `toml:"UDP_HOST"`
-	UDPPort                           int      `toml:"UDP_PORT"`
-	FallbackAddress                   string   `toml:"FALLBACK"`
-	UDPReaders                        int      `toml:"UDP_READERS"`
-	SocketBufferSize                  int      `toml:"SOCKET_BUFFER_SIZE"`
-	MaxConcurrentRequests             int      `toml:"MAX_CONCURRENT_REQUESTS"`
-	DNSRequestWorkers                 int      `toml:"DNS_REQUEST_WORKERS"`
-	DeferredSessionWorkers            int      `toml:"DEFERRED_SESSION_WORKERS"`
-	DeferredSessionQueueLimit         int      `toml:"DEFERRED_SESSION_QUEUE_LIMIT"`
-	MaxPacketSize                     int      `toml:"MAX_PACKET_SIZE"`
-	DropLogIntervalSecs               float64  `toml:"DROP_LOG_INTERVAL_SECONDS"`
-	SessionTimeoutSecs                float64  `toml:"SESSION_TIMEOUT_SECONDS"`
-	SessionCleanupIntervalSecs        float64  `toml:"SESSION_CLEANUP_INTERVAL_SECONDS"`
-	ClosedSessionRetentionSecs        float64  `toml:"CLOSED_SESSION_RETENTION_SECONDS"`
-	SessionInitReuseTTLSeconds        float64  `toml:"SESSION_INIT_REUSE_TTL_SECONDS"`
-	RecentlyClosedStreamTTLSeconds    float64  `toml:"RECENTLY_CLOSED_STREAM_TTL_SECONDS"`
-	RecentlyClosedStreamCap           int      `toml:"RECENTLY_CLOSED_STREAM_CAP"`
-	TerminalStreamRetentionSeconds    float64  `toml:"TERMINAL_STREAM_RETENTION_SECONDS"`
-	MaxPacketsPerBatch                int      `toml:"MAX_PACKETS_PER_BATCH"`
-	PacketBlockControlDuplication     int      `toml:"PACKET_BLOCK_CONTROL_DUPLICATION"`
-	DNSUpstreamServers                []string `toml:"DNS_UPSTREAM_SERVERS"`
-	DNSUpstreamTimeoutSecs            float64  `toml:"DNS_UPSTREAM_TIMEOUT"`
-	DNSInflightWaitTimeoutSecs        float64  `toml:"DNS_INFLIGHT_WAIT_TIMEOUT_SECONDS"`
-	SOCKSConnectTimeoutSecs           float64  `toml:"SOCKS_CONNECT_TIMEOUT"`
-	DNSFragmentAssemblyTimeoutSecs    float64  `toml:"DNS_FRAGMENT_ASSEMBLY_TIMEOUT"`
-	StreamSetupAckTTLSeconds          float64  `toml:"STREAM_SETUP_ACK_TTL_SECONDS"`
-	StreamResultPacketTTLSeconds      float64  `toml:"STREAM_RESULT_PACKET_TTL_SECONDS"`
-	StreamFailurePacketTTLSeconds     float64  `toml:"STREAM_FAILURE_PACKET_TTL_SECONDS"`
-	DNSCacheMaxRecords                int      `toml:"DNS_CACHE_MAX_RECORDS"`
-	DNSCacheTTLSeconds                float64  `toml:"DNS_CACHE_TTL_SECONDS"`
-	UseExternalSOCKS5                 bool     `toml:"USE_EXTERNAL_SOCKS5"`
-	SOCKS5Auth                        bool     `toml:"SOCKS5_AUTH"`
-	SOCKS5User                        string   `toml:"SOCKS5_USER"`
-	SOCKS5Pass                        string   `toml:"SOCKS5_PASS"`
-	ForwardIP                         string   `toml:"FORWARD_IP"`
-	ForwardPort                       int      `toml:"FORWARD_PORT"`
-	Domain                            []string `toml:"DOMAIN"`
-	MinVPNLabelLength                 int      `toml:"MIN_VPN_LABEL_LENGTH"`
-	SupportedUploadCompressionTypes   []int    `toml:"SUPPORTED_UPLOAD_COMPRESSION_TYPES"`
-	SupportedDownloadCompressionTypes []int    `toml:"SUPPORTED_DOWNLOAD_COMPRESSION_TYPES"`
-	DeviceCredential                  string   `toml:"DEVICE_CREDENTIAL"`
-	LogLevel                          string   `toml:"LOG_LEVEL"`
-	ARQWindowSize                     int      `toml:"ARQ_WINDOW_SIZE"`
-	ARQInitialRTOSeconds              float64  `toml:"ARQ_INITIAL_RTO_SECONDS"`
-	ARQMaxRTOSeconds                  float64  `toml:"ARQ_MAX_RTO_SECONDS"`
-	ARQControlInitialRTOSeconds       float64  `toml:"ARQ_CONTROL_INITIAL_RTO_SECONDS"`
-	ARQControlMaxRTOSeconds           float64  `toml:"ARQ_CONTROL_MAX_RTO_SECONDS"`
-	ARQMaxControlRetries              int      `toml:"ARQ_MAX_CONTROL_RETRIES"`
-	ARQInactivityTimeoutSeconds       float64  `toml:"ARQ_INACTIVITY_TIMEOUT_SECONDS"`
-	ARQDataPacketTTLSeconds           float64  `toml:"ARQ_DATA_PACKET_TTL_SECONDS"`
-	ARQControlPacketTTLSeconds        float64  `toml:"ARQ_CONTROL_PACKET_TTL_SECONDS"`
-	ARQMaxDataRetries                 int      `toml:"ARQ_MAX_DATA_RETRIES"`
-	ARQDataNackMaxGap                 int      `toml:"ARQ_DATA_NACK_MAX_GAP"`
-	ARQDataNackInitialDelaySeconds    float64  `toml:"ARQ_DATA_NACK_INITIAL_DELAY_SECONDS"`
-	ARQDataNackRepeatSeconds          float64  `toml:"ARQ_DATA_NACK_REPEAT_SECONDS"`
-	ARQTerminalDrainTimeoutSec        float64  `toml:"ARQ_TERMINAL_DRAIN_TIMEOUT_SECONDS"`
-	ARQTerminalAckWaitTimeoutSec      float64  `toml:"ARQ_TERMINAL_ACK_WAIT_TIMEOUT_SECONDS"`
-	MaxAllowedClientActiveSessions    int      `toml:"MAX_ALLOWED_CLIENT_ACTIVE_SESSION"`
-	MaxAllowedClientActiveStreams     int      `toml:"MAX_ALLOWED_CLIENT_ACTIVE_STREAMS_PER_SESSION"`
-	ClientMaxPacketDuplicationCount   int      `toml:"MAX_ALLOWED_CLIENT_PACKET_DUPLICATION_COUNT"`
-	ClientMaxSetupDuplicationCount    int      `toml:"MAX_ALLOWED_CLIENT_SETUP_PACKET_DUPLICATION_COUNT"`
-	ClientMaxUploadMTU                int      `toml:"MAX_ALLOWED_CLIENT_UPLOAD_MTU"`
-	ClientMaxDownloadMTU              int      `toml:"MAX_ALLOWED_CLIENT_DOWNLOAD_MTU"`
-	ClientMaxRxTxWorkers              int      `toml:"MAX_ALLOWED_CLIENT_RX_TX_WORKERS"`
-	ClientMinPingAggressiveInterval   float64  `toml:"MIN_ALLOWED_CLIENT_PING_AGGRESSIVE_INTERVAL_SECONDS"`
-	ClientMaxPacketsPerBatch          int      `toml:"MAX_ALLOWED_CLIENT_PACKETS_PER_BATCH"`
-	ClientMaxARQWindowSize            int      `toml:"MAX_ALLOWED_CLIENT_ARQ_WINDOW_SIZE"`
-	ClientMaxARQDataNackMaxGap        int      `toml:"MAX_ALLOWED_CLIENT_ARQ_DATA_NACK_MAX_GAP"`
-	ClientMinCompressionMinSize       int      `toml:"MIN_ALLOWED_CLIENT_COMPRESSION_MIN_SIZE"`
-	ClientMinARQInitialRTOSeconds     float64  `toml:"MIN_ALLOWED_CLIENT_ARQ_INITIAL_RTO_SECONDS"`
+	ConfigDir                       string   `toml:"-"`
+	ConfigPath                      string   `toml:"-"`
+	ProtocolType                    string   `toml:"PROTOCOL_TYPE"`
+	UDPHost                         string   `toml:"UDP_HOST"`
+	UDPPort                         int      `toml:"UDP_PORT"`
+	FallbackAddress                 string   `toml:"FALLBACK"`
+	UDPReaders                      int      `toml:"UDP_READERS"`
+	SocketBufferSize                int      `toml:"SOCKET_BUFFER_SIZE"`
+	MaxConcurrentRequests           int      `toml:"MAX_CONCURRENT_REQUESTS"`
+	DNSRequestWorkers               int      `toml:"DNS_REQUEST_WORKERS"`
+	DeferredSessionWorkers          int      `toml:"DEFERRED_SESSION_WORKERS"`
+	DeferredSessionQueueLimit       int      `toml:"DEFERRED_SESSION_QUEUE_LIMIT"`
+	MaxPacketSize                   int      `toml:"MAX_PACKET_SIZE"`
+	DropLogIntervalSecs             float64  `toml:"DROP_LOG_INTERVAL_SECONDS"`
+	SessionTimeoutSecs              float64  `toml:"SESSION_TIMEOUT_SECONDS"`
+	SessionCleanupIntervalSecs      float64  `toml:"SESSION_CLEANUP_INTERVAL_SECONDS"`
+	ClosedSessionRetentionSecs      float64  `toml:"CLOSED_SESSION_RETENTION_SECONDS"`
+	SessionInitReuseTTLSeconds      float64  `toml:"SESSION_INIT_REUSE_TTL_SECONDS"`
+	RecentlyClosedStreamTTLSeconds  float64  `toml:"RECENTLY_CLOSED_STREAM_TTL_SECONDS"`
+	RecentlyClosedStreamCap         int      `toml:"RECENTLY_CLOSED_STREAM_CAP"`
+	TerminalStreamRetentionSeconds  float64  `toml:"TERMINAL_STREAM_RETENTION_SECONDS"`
+	MaxPacketsPerBatch              int      `toml:"MAX_PACKETS_PER_BATCH"`
+	PacketBlockControlDuplication   int      `toml:"PACKET_BLOCK_CONTROL_DUPLICATION"`
+	DNSUpstreamServers              []string `toml:"DNS_UPSTREAM_SERVERS"`
+	DNSUpstreamTimeoutSecs          float64  `toml:"DNS_UPSTREAM_TIMEOUT"`
+	DNSInflightWaitTimeoutSecs      float64  `toml:"DNS_INFLIGHT_WAIT_TIMEOUT_SECONDS"`
+	SOCKSConnectTimeoutSecs         float64  `toml:"SOCKS_CONNECT_TIMEOUT"`
+	DNSFragmentAssemblyTimeoutSecs  float64  `toml:"DNS_FRAGMENT_ASSEMBLY_TIMEOUT"`
+	StreamSetupAckTTLSeconds        float64  `toml:"STREAM_SETUP_ACK_TTL_SECONDS"`
+	StreamResultPacketTTLSeconds    float64  `toml:"STREAM_RESULT_PACKET_TTL_SECONDS"`
+	StreamFailurePacketTTLSeconds   float64  `toml:"STREAM_FAILURE_PACKET_TTL_SECONDS"`
+	DNSCacheMaxRecords              int      `toml:"DNS_CACHE_MAX_RECORDS"`
+	DNSCacheTTLSeconds              float64  `toml:"DNS_CACHE_TTL_SECONDS"`
+	UseExternalSOCKS5               bool     `toml:"USE_EXTERNAL_SOCKS5"`
+	SOCKS5Auth                      bool     `toml:"SOCKS5_AUTH"`
+	SOCKS5User                      string   `toml:"SOCKS5_USER"`
+	SOCKS5Pass                      string   `toml:"SOCKS5_PASS"`
+	ForwardIP                       string   `toml:"FORWARD_IP"`
+	ForwardPort                     int      `toml:"FORWARD_PORT"`
+	Domain                          []string `toml:"DOMAIN"`
+	MinVPNLabelLength               int      `toml:"MIN_VPN_LABEL_LENGTH"`
+	DeviceCredential                string   `toml:"DEVICE_CREDENTIAL"`
+	LogLevel                        string   `toml:"LOG_LEVEL"`
+	ARQWindowSize                   int      `toml:"ARQ_WINDOW_SIZE"`
+	ARQInitialRTOSeconds            float64  `toml:"ARQ_INITIAL_RTO_SECONDS"`
+	ARQMaxRTOSeconds                float64  `toml:"ARQ_MAX_RTO_SECONDS"`
+	ARQControlInitialRTOSeconds     float64  `toml:"ARQ_CONTROL_INITIAL_RTO_SECONDS"`
+	ARQControlMaxRTOSeconds         float64  `toml:"ARQ_CONTROL_MAX_RTO_SECONDS"`
+	ARQMaxControlRetries            int      `toml:"ARQ_MAX_CONTROL_RETRIES"`
+	ARQInactivityTimeoutSeconds     float64  `toml:"ARQ_INACTIVITY_TIMEOUT_SECONDS"`
+	ARQDataPacketTTLSeconds         float64  `toml:"ARQ_DATA_PACKET_TTL_SECONDS"`
+	ARQControlPacketTTLSeconds      float64  `toml:"ARQ_CONTROL_PACKET_TTL_SECONDS"`
+	ARQMaxDataRetries               int      `toml:"ARQ_MAX_DATA_RETRIES"`
+	ARQDataNackMaxGap               int      `toml:"ARQ_DATA_NACK_MAX_GAP"`
+	ARQDataNackInitialDelaySeconds  float64  `toml:"ARQ_DATA_NACK_INITIAL_DELAY_SECONDS"`
+	ARQDataNackRepeatSeconds        float64  `toml:"ARQ_DATA_NACK_REPEAT_SECONDS"`
+	ARQTerminalDrainTimeoutSec      float64  `toml:"ARQ_TERMINAL_DRAIN_TIMEOUT_SECONDS"`
+	ARQTerminalAckWaitTimeoutSec    float64  `toml:"ARQ_TERMINAL_ACK_WAIT_TIMEOUT_SECONDS"`
+	MaxAllowedClientActiveSessions  int      `toml:"MAX_ALLOWED_CLIENT_ACTIVE_SESSION"`
+	MaxAllowedClientActiveStreams   int      `toml:"MAX_ALLOWED_CLIENT_ACTIVE_STREAMS_PER_SESSION"`
+	ClientMaxPacketDuplicationCount int      `toml:"MAX_ALLOWED_CLIENT_PACKET_DUPLICATION_COUNT"`
+	ClientMaxSetupDuplicationCount  int      `toml:"MAX_ALLOWED_CLIENT_SETUP_PACKET_DUPLICATION_COUNT"`
+	ClientMaxUploadMTU              int      `toml:"MAX_ALLOWED_CLIENT_UPLOAD_MTU"`
+	ClientMaxDownloadMTU            int      `toml:"MAX_ALLOWED_CLIENT_DOWNLOAD_MTU"`
+	ClientMaxRxTxWorkers            int      `toml:"MAX_ALLOWED_CLIENT_RX_TX_WORKERS"`
+	ClientMinPingAggressiveInterval float64  `toml:"MIN_ALLOWED_CLIENT_PING_AGGRESSIVE_INTERVAL_SECONDS"`
+	ClientMaxPacketsPerBatch        int      `toml:"MAX_ALLOWED_CLIENT_PACKETS_PER_BATCH"`
+	ClientMaxARQWindowSize          int      `toml:"MAX_ALLOWED_CLIENT_ARQ_WINDOW_SIZE"`
+	ClientMaxARQDataNackMaxGap      int      `toml:"MAX_ALLOWED_CLIENT_ARQ_DATA_NACK_MAX_GAP"`
+	ClientMinARQInitialRTOSeconds   float64  `toml:"MIN_ALLOWED_CLIENT_ARQ_INITIAL_RTO_SECONDS"`
 }
 
 type ServerConfigOverrides struct {
@@ -116,77 +111,74 @@ func DefaultServerConfig() ServerConfig {
 
 func defaultServerConfig() ServerConfig {
 	return ServerConfig{
-		ProtocolType:                      "SOCKS5",
-		UDPHost:                           "",
-		UDPPort:                           53,
-		FallbackAddress:                   "",
-		UDPReaders:                        4,
-		SocketBufferSize:                  8 * 1024 * 1024,
-		MaxConcurrentRequests:             16384,
-		DNSRequestWorkers:                 8,
-		DeferredSessionWorkers:            4,
-		DeferredSessionQueueLimit:         4096,
-		MaxPacketSize:                     65535,
-		DropLogIntervalSecs:               2.0,
-		SessionTimeoutSecs:                300.0,
-		SessionCleanupIntervalSecs:        30.0,
-		ClosedSessionRetentionSecs:        600.0,
-		SessionInitReuseTTLSeconds:        600.0,
-		RecentlyClosedStreamTTLSeconds:    600.0,
-		RecentlyClosedStreamCap:           2000,
-		TerminalStreamRetentionSeconds:    45.0,
-		MaxPacketsPerBatch:                5,
-		PacketBlockControlDuplication:     1,
-		DNSUpstreamServers:                []string{"1.1.1.1:53", "1.0.0.1:53"},
-		DNSUpstreamTimeoutSecs:            4.0,
-		DNSInflightWaitTimeoutSecs:        15.0,
-		SOCKSConnectTimeoutSecs:           120.0,
-		DNSFragmentAssemblyTimeoutSecs:    300.0,
-		StreamSetupAckTTLSeconds:          400.0,
-		StreamResultPacketTTLSeconds:      300.0,
-		StreamFailurePacketTTLSeconds:     120.0,
-		DNSCacheMaxRecords:                50000,
-		DNSCacheTTLSeconds:                300.0,
-		UseExternalSOCKS5:                 false,
-		SOCKS5Auth:                        false,
-		SOCKS5User:                        "admin",
-		SOCKS5Pass:                        "123456",
-		ForwardIP:                         "",
-		ForwardPort:                       1080,
-		Domain:                            nil,
-		MinVPNLabelLength:                 3,
-		SupportedUploadCompressionTypes:   []int{0, 1, 2, 3},
-		SupportedDownloadCompressionTypes: []int{0, 1, 2, 3},
-		DeviceCredential:                  "",
-		LogLevel:                          "INFO",
-		ARQWindowSize:                     800,
-		ARQInitialRTOSeconds:              1.0,
-		ARQMaxRTOSeconds:                  5.0,
-		ARQControlInitialRTOSeconds:       0.5,
-		ARQControlMaxRTOSeconds:           3.0,
-		ARQMaxControlRetries:              400,
-		ARQInactivityTimeoutSeconds:       1800.0,
-		ARQDataPacketTTLSeconds:           2400.0,
-		ARQControlPacketTTLSeconds:        1200.0,
-		ARQMaxDataRetries:                 1200,
-		ARQDataNackMaxGap:                 16,
-		ARQDataNackInitialDelaySeconds:    0.3,
-		ARQDataNackRepeatSeconds:          1.0,
-		ARQTerminalDrainTimeoutSec:        120.0,
-		ARQTerminalAckWaitTimeoutSec:      90.0,
-		MaxAllowedClientActiveSessions:    255,
-		MaxAllowedClientActiveStreams:     2000,
-		ClientMaxPacketDuplicationCount:   5,
-		ClientMaxSetupDuplicationCount:    6,
-		ClientMaxUploadMTU:                150,
-		ClientMaxDownloadMTU:              4096,
-		ClientMaxRxTxWorkers:              255,
-		ClientMinPingAggressiveInterval:   0.05,
-		ClientMaxPacketsPerBatch:          20,
-		ClientMaxARQWindowSize:            8000,
-		ClientMaxARQDataNackMaxGap:        255,
-		ClientMinCompressionMinSize:       120,
-		ClientMinARQInitialRTOSeconds:     0.05,
+		ProtocolType:                    "SOCKS5",
+		UDPHost:                         "",
+		UDPPort:                         53,
+		FallbackAddress:                 "",
+		UDPReaders:                      4,
+		SocketBufferSize:                8 * 1024 * 1024,
+		MaxConcurrentRequests:           16384,
+		DNSRequestWorkers:               8,
+		DeferredSessionWorkers:          4,
+		DeferredSessionQueueLimit:       4096,
+		MaxPacketSize:                   65535,
+		DropLogIntervalSecs:             2.0,
+		SessionTimeoutSecs:              300.0,
+		SessionCleanupIntervalSecs:      30.0,
+		ClosedSessionRetentionSecs:      600.0,
+		SessionInitReuseTTLSeconds:      600.0,
+		RecentlyClosedStreamTTLSeconds:  600.0,
+		RecentlyClosedStreamCap:         2000,
+		TerminalStreamRetentionSeconds:  45.0,
+		MaxPacketsPerBatch:              5,
+		PacketBlockControlDuplication:   1,
+		DNSUpstreamServers:              []string{"1.1.1.1:53", "1.0.0.1:53"},
+		DNSUpstreamTimeoutSecs:          4.0,
+		DNSInflightWaitTimeoutSecs:      15.0,
+		SOCKSConnectTimeoutSecs:         120.0,
+		DNSFragmentAssemblyTimeoutSecs:  300.0,
+		StreamSetupAckTTLSeconds:        400.0,
+		StreamResultPacketTTLSeconds:    300.0,
+		StreamFailurePacketTTLSeconds:   120.0,
+		DNSCacheMaxRecords:              50000,
+		DNSCacheTTLSeconds:              300.0,
+		UseExternalSOCKS5:               false,
+		SOCKS5Auth:                      false,
+		SOCKS5User:                      "admin",
+		SOCKS5Pass:                      "123456",
+		ForwardIP:                       "",
+		ForwardPort:                     1080,
+		Domain:                          nil,
+		MinVPNLabelLength:               3,
+		DeviceCredential:                "",
+		LogLevel:                        "INFO",
+		ARQWindowSize:                   800,
+		ARQInitialRTOSeconds:            1.0,
+		ARQMaxRTOSeconds:                5.0,
+		ARQControlInitialRTOSeconds:     0.5,
+		ARQControlMaxRTOSeconds:         3.0,
+		ARQMaxControlRetries:            400,
+		ARQInactivityTimeoutSeconds:     1800.0,
+		ARQDataPacketTTLSeconds:         2400.0,
+		ARQControlPacketTTLSeconds:      1200.0,
+		ARQMaxDataRetries:               1200,
+		ARQDataNackMaxGap:               16,
+		ARQDataNackInitialDelaySeconds:  0.3,
+		ARQDataNackRepeatSeconds:        1.0,
+		ARQTerminalDrainTimeoutSec:      120.0,
+		ARQTerminalAckWaitTimeoutSec:    90.0,
+		MaxAllowedClientActiveSessions:  255,
+		MaxAllowedClientActiveStreams:   2000,
+		ClientMaxPacketDuplicationCount: 5,
+		ClientMaxSetupDuplicationCount:  6,
+		ClientMaxUploadMTU:              150,
+		ClientMaxDownloadMTU:            4096,
+		ClientMaxRxTxWorkers:            255,
+		ClientMinPingAggressiveInterval: 0.05,
+		ClientMaxPacketsPerBatch:        20,
+		ClientMaxARQWindowSize:          8000,
+		ClientMaxARQDataNackMaxGap:      255,
+		ClientMinARQInitialRTOSeconds:   0.05,
 	}
 }
 
@@ -441,9 +433,6 @@ func finalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 		cfg.MinVPNLabelLength = 3
 	}
 
-	cfg.SupportedUploadCompressionTypes = normalizeCompressionTypeList(cfg.SupportedUploadCompressionTypes)
-	cfg.SupportedDownloadCompressionTypes = normalizeCompressionTypeList(cfg.SupportedDownloadCompressionTypes)
-
 	cfg.DeviceCredential = strings.TrimSpace(cfg.DeviceCredential)
 
 	if cfg.LogLevel == "" {
@@ -477,7 +466,6 @@ func finalizeServerConfig(cfg ServerConfig) (ServerConfig, error) {
 	cfg.ClientMaxPacketsPerBatch = clampInt(defaultIntBelow(cfg.ClientMaxPacketsPerBatch, 1, defaultServerConfig().ClientMaxPacketsPerBatch), 1, int(^uint8(0)))
 	cfg.ClientMaxARQWindowSize = clampInt(defaultIntBelow(cfg.ClientMaxARQWindowSize, 1, defaultServerConfig().ClientMaxARQWindowSize), 1, min(8000, int(^uint16(0))))
 	cfg.ClientMaxARQDataNackMaxGap = clampInt(defaultIntBelow(cfg.ClientMaxARQDataNackMaxGap, 0, defaultServerConfig().ClientMaxARQDataNackMaxGap), 0, min(255, int(^uint8(0))))
-	cfg.ClientMinCompressionMinSize = clampInt(defaultIntBelow(cfg.ClientMinCompressionMinSize, 1, defaultServerConfig().ClientMinCompressionMinSize), 1, int(^uint16(0)))
 	cfg.ClientMinARQInitialRTOSeconds = clampFloat(defaultFloatAtMostZero(cfg.ClientMinARQInitialRTOSeconds, defaultServerConfig().ClientMinARQInitialRTOSeconds), 0.05, 1.0)
 
 	return cfg, nil
@@ -631,26 +619,6 @@ func (c ServerConfig) EffectiveDNSFragmentStoreCapacity() int {
 func (c ServerConfig) EffectiveSOCKS5FragmentStoreCapacity() int {
 	recommended := c.EffectiveMaxConcurrentRequests()/16 + c.EffectiveDeferredSessionWorkers()*32
 	return clampInt(recommended, 64, 8192)
-}
-
-func normalizeCompressionTypeList(values []int) []int {
-	if len(values) == 0 {
-		return []int{0}
-	}
-
-	seen := [4]bool{}
-	out := make([]int, 0, len(values))
-	for _, value := range values {
-		if value < 0 || value > 3 || seen[value] || !compression.IsTypeAvailable(uint8(value)) {
-			continue
-		}
-		seen[value] = true
-		out = append(out, value)
-	}
-	if len(out) == 0 {
-		return []int{0}
-	}
-	return out
 }
 
 func applyServerConfigOverrideValues(cfg *ServerConfig, values map[string]any) error {

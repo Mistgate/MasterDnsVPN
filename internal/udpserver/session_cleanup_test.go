@@ -80,7 +80,7 @@ func TestCleanupClosedSessionClosesStreamsAndClearsQueues(t *testing.T) {
 	if !stream.enqueueInboundData(Enums.PACKET_STREAM_DATA, 1, 0, []byte("inbound")) {
 		t.Fatal("expected inbound packet to queue")
 	}
-	if !stream.PushTXPacket(Enums.DefaultPacketPriority(Enums.PACKET_STREAM_RST), Enums.PACKET_STREAM_RST, 12, 0, 0, 0, 0, nil) {
+	if !stream.PushTXPacket(Enums.DefaultPacketPriority(Enums.PACKET_STREAM_RST), Enums.PACKET_STREAM_RST, 12, 0, 0, 0, nil) {
 		t.Fatalf("expected TX packet to be queued")
 	}
 	record.enqueueOrphanReset(Enums.PACKET_STREAM_RST, 1, 12)
@@ -159,7 +159,7 @@ func TestFinalizeAfterARQCloseClearsTXQueue(t *testing.T) {
 	}
 
 	stream.Connected = true
-	if !stream.PushTXPacket(Enums.DefaultPacketPriority(Enums.PACKET_STREAM_RST), Enums.PACKET_STREAM_RST, 5, 0, 0, 0, 0, nil) {
+	if !stream.PushTXPacket(Enums.DefaultPacketPriority(Enums.PACKET_STREAM_RST), Enums.PACKET_STREAM_RST, 5, 0, 0, 0, nil) {
 		t.Fatal("expected queued TX packet before finalize")
 	}
 	if stream.ARQ != nil {
@@ -308,7 +308,7 @@ func TestDequeueSessionResponseScansActiveStreams(t *testing.T) {
 	if stream == nil {
 		t.Fatal("expected stream to be created")
 	}
-	if !stream.PushTXPacket(Enums.DefaultPacketPriority(Enums.PACKET_STREAM_CONNECTED), Enums.PACKET_STREAM_CONNECTED, 12, 0, 0, 0, 0, nil) {
+	if !stream.PushTXPacket(Enums.DefaultPacketPriority(Enums.PACKET_STREAM_CONNECTED), Enums.PACKET_STREAM_CONNECTED, 12, 0, 0, 0, nil) {
 		t.Fatal("expected stream packet to queue")
 	}
 
@@ -400,7 +400,7 @@ func TestCleanupTerminalStreamsAbortsAndRemovesExpiredStreams(t *testing.T) {
 	upstream := &testReadWriteCloser{}
 	stream := record.getOrCreateStream(2, arq.Config{}, nil, nil)
 	stream.UpstreamConn = upstream
-	if !stream.PushTXPacket(Enums.DefaultPacketPriority(Enums.PACKET_STREAM_CLOSE_READ), Enums.PACKET_STREAM_CLOSE_READ, 21, 0, 0, 0, 0, nil) {
+	if !stream.PushTXPacket(Enums.DefaultPacketPriority(Enums.PACKET_STREAM_CLOSE_READ), Enums.PACKET_STREAM_CLOSE_READ, 21, 0, 0, 0, nil) {
 		t.Fatalf("expected TX packet to be queued")
 	}
 
@@ -429,10 +429,10 @@ func TestDequeueSessionResponseDuplicatesLastPackedControlBlock(t *testing.T) {
 	record := newTestSessionRecord(12)
 	record.MaxPackedBlocks = 2
 	stream := record.getOrCreateStream(1, arq.Config{}, nil, nil)
-	if !stream.PushTXPacket(Enums.DefaultPacketPriority(Enums.PACKET_STREAM_SYN_ACK), Enums.PACKET_STREAM_SYN_ACK, 11, 0, 0, 0, 0, nil) {
+	if !stream.PushTXPacket(Enums.DefaultPacketPriority(Enums.PACKET_STREAM_SYN_ACK), Enums.PACKET_STREAM_SYN_ACK, 11, 0, 0, 0, nil) {
 		t.Fatalf("expected first control packet to queue")
 	}
-	if !stream.PushTXPacket(Enums.DefaultPacketPriority(Enums.PACKET_STREAM_CLOSE_READ_ACK), Enums.PACKET_STREAM_CLOSE_READ_ACK, 12, 0, 0, 0, 0, nil) {
+	if !stream.PushTXPacket(Enums.DefaultPacketPriority(Enums.PACKET_STREAM_CLOSE_READ_ACK), Enums.PACKET_STREAM_CLOSE_READ_ACK, 12, 0, 0, 0, nil) {
 		t.Fatalf("expected second control packet to queue")
 	}
 
@@ -480,7 +480,7 @@ func TestDeactivateStreamRemovesClosedStreamFromRoundRobinAndClearsQueue(t *test
 	if stream == nil {
 		t.Fatal("expected stream to be created")
 	}
-	if !stream.PushTXPacket(Enums.DefaultPacketPriority(Enums.PACKET_STREAM_DATA), Enums.PACKET_STREAM_DATA, 77, 0, 0, 0, 0, []byte("stale")) {
+	if !stream.PushTXPacket(Enums.DefaultPacketPriority(Enums.PACKET_STREAM_DATA), Enums.PACKET_STREAM_DATA, 77, 0, 0, 0, []byte("stale")) {
 		t.Fatal("expected stale data to be queued")
 	}
 
@@ -562,10 +562,10 @@ func TestHandleStreamRSTRequestPreservesRstAckViaOrphanQueue(t *testing.T) {
 	if stream == nil {
 		t.Fatal("expected stream to be created")
 	}
-	if !stream.PushTXPacket(Enums.DefaultPacketPriority(Enums.PACKET_STREAM_RST_ACK), Enums.PACKET_STREAM_RST_ACK, 55, 0, 0, 0, 0, nil) {
+	if !stream.PushTXPacket(Enums.DefaultPacketPriority(Enums.PACKET_STREAM_RST_ACK), Enums.PACKET_STREAM_RST_ACK, 55, 0, 0, 0, nil) {
 		t.Fatal("expected initial RST_ACK to be queued on stream")
 	}
-	if !stream.PushTXPacket(Enums.DefaultPacketPriority(Enums.PACKET_STREAM_DATA), Enums.PACKET_STREAM_DATA, 77, 0, 0, 0, 0, []byte("stale")) {
+	if !stream.PushTXPacket(Enums.DefaultPacketPriority(Enums.PACKET_STREAM_DATA), Enums.PACKET_STREAM_DATA, 77, 0, 0, 0, []byte("stale")) {
 		t.Fatal("expected stale data to be queued")
 	}
 
@@ -758,10 +758,9 @@ func TestSweepRecentlyClosedStreamsPrunesExpiredEntries(t *testing.T) {
 func TestPreprocessInboundPacketDoesNotQueueImmediateDataAck(t *testing.T) {
 	s := newTestServerForStreamSyn("TCP")
 	record := newTestSessionRecord(19)
-	record.DownloadCompression = 0
 	s.sessions.byID[record.ID] = record
 
-	stream := record.getOrCreateStream(31, s.streamARQConfig(record.DownloadCompression), nil, s.log)
+	stream := record.getOrCreateStream(31, s.streamARQConfig(), nil, s.log)
 	if stream == nil {
 		t.Fatal("expected stream to be created")
 	}

@@ -42,7 +42,7 @@ func TestAuthenticatedMTUDownProbeBuildsEncryptedPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenProbeWithCredential returned error: %v", err)
 	}
-	packet, err := VpnProto.ParseInflated(probe.Payload)
+	packet, err := VpnProto.Parse(probe.Payload)
 	if err != nil {
 		t.Fatalf("ParseInflated returned error: %v", err)
 	}

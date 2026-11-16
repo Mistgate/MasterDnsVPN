@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"masterdnsvpn-go/internal/arq"
-	"masterdnsvpn-go/internal/compression"
 	DnsParser "masterdnsvpn-go/internal/dnsparser"
 	Enums "masterdnsvpn-go/internal/enums"
 	VpnProto "masterdnsvpn-go/internal/vpnproto"
@@ -59,15 +58,14 @@ func (s *Server) buildSessionVPNResponse(questionPacket []byte, requestName stri
 	if record == nil || record.Crypto == nil {
 		return nil
 	}
-	raw, err := VpnProto.BuildRawAuto(VpnProto.BuildOptions{
-		PacketType:      packet.PacketType,
-		StreamID:        packet.StreamID,
-		SequenceNum:     packet.SequenceNum,
-		FragmentID:      packet.FragmentID,
-		TotalFragments:  packet.TotalFragments,
-		CompressionType: packet.CompressionType,
-		Payload:         packet.Payload,
-	}, compression.DefaultMinSize)
+	raw, err := VpnProto.BuildRaw(VpnProto.BuildOptions{
+		PacketType:     packet.PacketType,
+		StreamID:       packet.StreamID,
+		SequenceNum:    packet.SequenceNum,
+		FragmentID:     packet.FragmentID,
+		TotalFragments: packet.TotalFragments,
+		Payload:        packet.Payload,
+	})
 	if err != nil {
 		return nil
 	}
@@ -95,7 +93,7 @@ func (s *Server) queueSessionPacket(sessionID uint8, packet VpnProto.Packet) boo
 			return false
 		}
 
-		return stream.PushTXPacket(getEffectivePriority(packet.PacketType, 3), packet.PacketType, packet.SequenceNum, packet.FragmentID, packet.TotalFragments, packet.CompressionType, 0, packet.Payload)
+		return stream.PushTXPacket(getEffectivePriority(packet.PacketType, 3), packet.PacketType, packet.SequenceNum, packet.FragmentID, packet.TotalFragments, 0, packet.Payload)
 	}
 
 	stream, exists := record.getStream(packet.StreamID)
@@ -103,10 +101,10 @@ func (s *Server) queueSessionPacket(sessionID uint8, packet VpnProto.Packet) boo
 		return false
 	}
 
-	return stream.PushTXPacket(getEffectivePriority(packet.PacketType, 3), packet.PacketType, packet.SequenceNum, packet.FragmentID, packet.TotalFragments, packet.CompressionType, 0, packet.Payload)
+	return stream.PushTXPacket(getEffectivePriority(packet.PacketType, 3), packet.PacketType, packet.SequenceNum, packet.FragmentID, packet.TotalFragments, 0, packet.Payload)
 }
 
-func (s *Server) streamARQConfig(compressionType uint8) arq.Config {
+func (s *Server) streamARQConfig() arq.Config {
 	return arq.Config{
 		WindowSize:                  s.cfg.ARQWindowSize,
 		RTO:                         s.cfg.ARQInitialRTOSeconds,
@@ -124,7 +122,6 @@ func (s *Server) streamARQConfig(compressionType uint8) arq.Config {
 		ControlPacketTTL:            s.cfg.ARQControlPacketTTLSeconds,
 		TerminalDrainTimeout:        s.cfg.ARQTerminalDrainTimeoutSec,
 		TerminalAckWaitTimeout:      s.cfg.ARQTerminalAckWaitTimeoutSec,
-		CompressionType:             compressionType,
 	}
 }
 
@@ -485,17 +482,15 @@ buildResult:
 
 func vpnPacketFromTX(p *serverStreamTXPacket, streamID uint16) VpnProto.Packet {
 	return VpnProto.Packet{
-		PacketType:         p.PacketType,
-		StreamID:           streamID,
-		SequenceNum:        p.SequenceNum,
-		FragmentID:         p.FragmentID,
-		TotalFragments:     p.TotalFragments,
-		CompressionType:    p.CompressionType,
-		HasCompressionType: p.CompressionType != compression.TypeOff,
-		Payload:            p.Payload,
-		HasSequenceNum:     p.SequenceNum != 0,
-		HasFragmentInfo:    p.FragmentID != 0 || p.TotalFragments != 0,
-		HasStreamID:        true,
+		PacketType:      p.PacketType,
+		StreamID:        streamID,
+		SequenceNum:     p.SequenceNum,
+		FragmentID:      p.FragmentID,
+		TotalFragments:  p.TotalFragments,
+		Payload:         p.Payload,
+		HasSequenceNum:  p.SequenceNum != 0,
+		HasFragmentInfo: p.FragmentID != 0 || p.TotalFragments != 0,
+		HasStreamID:     true,
 	}
 }
 
@@ -560,11 +555,4 @@ func buildPreSessionPacketTypes() [256]bool {
 	values[Enums.PACKET_MTU_UP_REQ] = true
 	values[Enums.PACKET_MTU_DOWN_REQ] = true
 	return values
-}
-
-func resolveCompressionType(requested uint8, allowedMask uint8) uint8 {
-	if requested <= compression.TypeZLIB && allowedMask&(1<<requested) != 0 {
-		return requested
-	}
-	return compression.TypeOff
 }

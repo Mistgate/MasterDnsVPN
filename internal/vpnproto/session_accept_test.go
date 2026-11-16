@@ -13,7 +13,6 @@ func TestSessionAcceptClientPolicyRoundTrip(t *testing.T) {
 		MaxPacketsPerBatch:        10,
 		MaxARQWindowSize:          8000,
 		MaxARQDataNackMaxGap:      128,
-		MinCompressionMinSize:     120,
 		MinARQInitialRTOSeconds:   0.25,
 	}
 
@@ -50,9 +49,6 @@ func TestSessionAcceptClientPolicyRoundTrip(t *testing.T) {
 	if decoded.MaxARQDataNackMaxGap != policy.MaxARQDataNackMaxGap {
 		t.Fatalf("unexpected arq data nack gap: got=%d want=%d", decoded.MaxARQDataNackMaxGap, policy.MaxARQDataNackMaxGap)
 	}
-	if decoded.MinCompressionMinSize != policy.MinCompressionMinSize {
-		t.Fatalf("unexpected compression min size: got=%d want=%d", decoded.MinCompressionMinSize, policy.MinCompressionMinSize)
-	}
 	if decoded.MinARQInitialRTOSeconds < 0.245 || decoded.MinARQInitialRTOSeconds > 0.255 {
 		t.Fatalf("unexpected arq initial rto: got=%f", decoded.MinARQInitialRTOSeconds)
 	}
@@ -60,9 +56,8 @@ func TestSessionAcceptClientPolicyRoundTrip(t *testing.T) {
 
 func TestSessionAcceptV1PolicyRoundTrip(t *testing.T) {
 	payload := SessionAcceptPayload{
-		SessionID:       7,
-		CompressionPair: 3,
-		VerifyCode:      [4]byte{1, 2, 3, 4},
+		SessionID:  7,
+		VerifyCode: [4]byte{1, 2, 3, 4},
 		ClientPolicy: SessionAcceptClientPolicy{
 			MaxPacketDuplicationCount: 5,
 			MaxSetupDuplicationCount:  6,
@@ -73,7 +68,6 @@ func TestSessionAcceptV1PolicyRoundTrip(t *testing.T) {
 			MaxPacketsPerBatch:        10,
 			MaxARQWindowSize:          4096,
 			MaxARQDataNackMaxGap:      64,
-			MinCompressionMinSize:     120,
 			MinARQInitialRTOSeconds:   0.20,
 		},
 		HasClientPolicySync: true,
@@ -87,9 +81,6 @@ func TestSessionAcceptV1PolicyRoundTrip(t *testing.T) {
 
 	if decoded.SessionID != payload.SessionID {
 		t.Fatalf("unexpected decoded session id: got=%d want=%d", decoded.SessionID, payload.SessionID)
-	}
-	if decoded.CompressionPair != payload.CompressionPair {
-		t.Fatalf("unexpected compression pair: got=%d want=%d", decoded.CompressionPair, payload.CompressionPair)
 	}
 	if decoded.VerifyCode != payload.VerifyCode {
 		t.Fatalf("unexpected verify code: got=%v want=%v", decoded.VerifyCode, payload.VerifyCode)

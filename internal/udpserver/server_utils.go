@@ -11,7 +11,6 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"masterdnsvpn-go/internal/compression"
 	DnsParser "masterdnsvpn-go/internal/dnsparser"
 	Enums "masterdnsvpn-go/internal/enums"
 	"masterdnsvpn-go/internal/logger"
@@ -97,17 +96,6 @@ func sessionResponseModeName(mode uint8) string {
 		return "BASE64"
 	}
 	return "RAW (Bytes)"
-}
-
-func buildCompressionMask(values []int) uint8 {
-	var mask uint8 = 1 << compression.TypeOff
-	for _, value := range values {
-		if value < compression.TypeOff || value > compression.TypeZLIB || !compression.IsTypeAvailable(uint8(value)) {
-			continue
-		}
-		mask |= 1 << uint8(value)
-	}
-	return mask
 }
 
 func parseMTUProbeBaseEncoding(mode uint8) (bool, bool) {

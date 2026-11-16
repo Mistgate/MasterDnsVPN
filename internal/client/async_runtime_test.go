@@ -45,7 +45,7 @@ func createTestClient(t *testing.T) *Client {
 
 type duplicateTestEnqueuer struct{}
 
-func (duplicateTestEnqueuer) PushTXPacket(int, uint8, uint16, uint8, uint8, uint8, time.Duration, []byte) bool {
+func (duplicateTestEnqueuer) PushTXPacket(int, uint8, uint16, uint8, uint8, time.Duration, []byte) bool {
 	return true
 }
 

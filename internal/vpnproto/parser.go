@@ -25,7 +25,6 @@ const (
 	packetFlagStream
 	packetFlagSequence
 	packetFlagFragment
-	packetFlagCompression
 )
 
 var packetFlags = buildPacketFlags()
@@ -46,9 +45,6 @@ type Packet struct {
 	HasFragmentInfo bool
 	FragmentID      uint8
 	TotalFragments  uint8
-
-	HasCompressionType bool
-	CompressionType    uint8
 
 	HeaderLength int
 	Payload      []byte
@@ -88,10 +84,6 @@ func parseFrom(data []byte, start int) (Packet, error) {
 	if flags&packetFlagFragment != 0 {
 		minLen += 2
 	}
-	if flags&packetFlagCompression != 0 {
-		minLen++
-	}
-
 	if len(data) < minLen {
 		return Packet{}, ErrPacketTooShort
 	}
@@ -120,12 +112,6 @@ func parseFrom(data []byte, start int) (Packet, error) {
 		offset += 2
 	}
 
-	if flags&packetFlagCompression != 0 {
-		packet.HasCompressionType = true
-		packet.CompressionType = data[offset]
-		offset++
-	}
-
 	packet.HeaderLength = offset
 	packet.Payload = data[packet.HeaderLength:]
 	return packet, nil
@@ -141,10 +127,6 @@ func hasSequenceExtension(packetType uint8) bool {
 
 func hasFragmentExtension(packetType uint8) bool {
 	return packetFlags[packetType]&packetFlagFragment != 0
-}
-
-func hasCompressionExtension(packetType uint8) bool {
-	return packetFlags[packetType]&packetFlagCompression != 0
 }
 
 func buildPacketFlags() [256]uint8 {
@@ -169,6 +151,7 @@ func buildPacketFlags() [256]uint8 {
 		Enums.PACKET_ERROR_DROP,
 		Enums.PACKET_MTU_UP_REQ,
 		Enums.PACKET_MTU_DOWN_RES,
+		Enums.PACKET_PACKED_CONTROL_BLOCKS,
 	}
 
 	for _, packetType := range validOnly {
@@ -241,20 +224,6 @@ func buildPacketFlags() [256]uint8 {
 	}
 	for _, packetType := range frag {
 		flags[packetType] |= packetFlagFragment
-	}
-
-	comp := [...]uint8{
-		Enums.PACKET_STREAM_DATA,
-		Enums.PACKET_STREAM_RESEND,
-		Enums.PACKET_PACKED_CONTROL_BLOCKS,
-		Enums.PACKET_DNS_QUERY_REQ,
-		Enums.PACKET_DNS_QUERY_RES,
-		Enums.PACKET_MTU_UP_REQ,
-		Enums.PACKET_MTU_DOWN_RES,
-	}
-
-	for _, packetType := range comp {
-		flags[packetType] |= packetFlagValid | packetFlagCompression
 	}
 
 	return flags

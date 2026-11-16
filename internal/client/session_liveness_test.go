@@ -82,13 +82,12 @@ func TestDiscoveredUploadMTUEqualsSessionFramePayloadCapacity(t *testing.T) {
 	}
 	build := func(payloadLen int) error {
 		raw, err := VpnProto.BuildRaw(VpnProto.BuildOptions{
-			PacketType:      Enums.PACKET_STREAM_DATA,
-			StreamID:        0xffff,
-			SequenceNum:     0xffff,
-			FragmentID:      0xff,
-			TotalFragments:  0xff,
-			CompressionType: 0xff,
-			Payload:         make([]byte, payloadLen),
+			PacketType:     Enums.PACKET_STREAM_DATA,
+			StreamID:       0xffff,
+			SequenceNum:    0xffff,
+			FragmentID:     0xff,
+			TotalFragments: 0xff,
+			Payload:        make([]byte, payloadLen),
 		})
 		if err != nil {
 			return err
@@ -108,9 +107,9 @@ func TestDiscoveredUploadMTUEqualsSessionFramePayloadCapacity(t *testing.T) {
 	}
 
 	// Payload share of the 150-byte frame the 13-character zone allows:
-	// 150 = 1 sid + 4 ctr + 16 tag + 8 inner header + payload.
-	if capacity != 121 {
-		t.Fatalf("expected 121 payload bytes in a 150-byte upstream frame, got %d", capacity)
+	// 150 = 1 sid + 4 ctr + 16 tag + 7 inner header + payload.
+	if capacity != 122 {
+		t.Fatalf("expected 122 payload bytes in a 150-byte upstream frame, got %d", capacity)
 	}
 }
 

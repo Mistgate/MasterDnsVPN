@@ -13,8 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"masterdnsvpn-go/internal/compression"
 )
 
 func TestLoadClientConfigNormalizesAndLoadsResolvers(t *testing.T) {
@@ -250,9 +248,6 @@ MTU_TEST_PARALLELISM = 0
 	}
 	if cfg.ARQMaxControlRetries != 400 || cfg.ARQMaxDataRetries != 1200 {
 		t.Fatalf("unexpected arq retry defaults: control=%d data=%d", cfg.ARQMaxControlRetries, cfg.ARQMaxDataRetries)
-	}
-	if cfg.CompressionMinSize != compression.DefaultMinSize {
-		t.Fatalf("unexpected compression min size default: got=%d want=%d", cfg.CompressionMinSize, compression.DefaultMinSize)
 	}
 	if cfg.MTUTestRetries != 1 || cfg.MTUTestTimeout != 2.0 || cfg.MTUTestParallelism != 1 {
 		t.Fatalf("unexpected mtu defaults: retries=%d timeout=%v parallelism=%d", cfg.MTUTestRetries, cfg.MTUTestTimeout, cfg.MTUTestParallelism)

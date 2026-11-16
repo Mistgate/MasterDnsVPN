@@ -53,8 +53,6 @@ type Client struct {
 	syncedUploadChars                     int
 	safeUploadMTU                         int
 	maxPackedBlocks                       int
-	uploadCompression                     uint8
-	downloadCompression                   uint8
 	mtuCryptoOverhead                     int
 	mtuProbeCounter                       atomic.Uint32
 	mtuTestRetries                        int
@@ -155,7 +153,6 @@ type clientStreamTXPacket struct {
 	SequenceNum      uint16
 	FragmentID       uint8
 	TotalFragments   uint8
-	CompressionType  uint8
 	Payload          []byte
 	CreatedAt        time.Time
 	TTL              time.Duration
@@ -261,17 +258,15 @@ func New(cfg config.ClientConfig, log *logger.Logger, credential security.Creden
 	balancer := NewBalancer(cfg.ResolverBalancingStrategy, log, pool)
 
 	c := &Client{
-		cfg:                 cfg,
-		log:                 log,
-		credential:          credential,
-		balancer:            balancer,
-		pool:                pool,
-		bgLimiter:           NewBackgroundQueryLimiter(15.0, 15),
-		uploadCompression:   uint8(cfg.UploadCompressionType),
-		downloadCompression: uint8(cfg.DownloadCompressionType),
-		mtuCryptoOverhead:   mtuCryptoOverhead(),
-		maxPackedBlocks:     1,
-		responseMode:        responseMode,
+		cfg:               cfg,
+		log:               log,
+		credential:        credential,
+		balancer:          balancer,
+		pool:              pool,
+		bgLimiter:         NewBackgroundQueryLimiter(15.0, 15),
+		mtuCryptoOverhead: mtuCryptoOverhead(),
+		maxPackedBlocks:   1,
+		responseMode:      responseMode,
 		udpBufferPool: sync.Pool{
 			New: func() any {
 				return make([]byte, RuntimeUDPReadBufferSize)

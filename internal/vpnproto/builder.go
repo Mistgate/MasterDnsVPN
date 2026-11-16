@@ -8,14 +8,13 @@
 package vpnproto
 
 type BuildOptions struct {
-	SessionID       uint8
-	PacketType      uint8
-	StreamID        uint16
-	SequenceNum     uint16
-	FragmentID      uint8
-	TotalFragments  uint8
-	CompressionType uint8
-	Payload         []byte
+	SessionID      uint8
+	PacketType     uint8
+	StreamID       uint16
+	SequenceNum    uint16
+	FragmentID     uint8
+	TotalFragments uint8
+	Payload        []byte
 }
 
 func BuildRaw(opts BuildOptions) ([]byte, error) {
@@ -33,9 +32,6 @@ func BuildRaw(opts BuildOptions) ([]byte, error) {
 	}
 	if flags&packetFlagFragment != 0 {
 		headerLen += 2
-	}
-	if flags&packetFlagCompression != 0 {
-		headerLen++
 	}
 
 	raw := make([]byte, headerLen+len(opts.Payload))
@@ -57,10 +53,6 @@ func BuildRaw(opts BuildOptions) ([]byte, error) {
 		raw[offset+1] = opts.TotalFragments
 		offset += 2
 	}
-	if flags&packetFlagCompression != 0 {
-		raw[offset] = opts.CompressionType
-		offset++
-	}
 
 	copy(raw[offset:], opts.Payload)
 	return raw, nil
@@ -81,9 +73,6 @@ func HeaderRawSize(packetType uint8) int {
 	}
 	if flags&packetFlagFragment != 0 {
 		size += 2
-	}
-	if flags&packetFlagCompression != 0 {
-		size++
 	}
 	return size
 }

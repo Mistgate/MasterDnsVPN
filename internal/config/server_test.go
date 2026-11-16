@@ -88,11 +88,9 @@ SUPPORTED_DOWNLOAD_COMPRESSION_TYPES = [0, 3]
 
 	cfg, err := LoadServerConfigWithOverrides(configPath, ServerConfigOverrides{
 		Values: map[string]any{
-			"UDPPort":                           5300,
-			"Domain":                            []string{"flag.example.com", "alt.example.com"},
-			"DeviceCredential":                  "1111111111111111.2222222222222222222222222222222222222222222222222222222222222222",
-			"SupportedUploadCompressionTypes":   []int{0, 1},
-			"SupportedDownloadCompressionTypes": []int{0, 1, 3},
+			"UDPPort":          5300,
+			"Domain":           []string{"flag.example.com", "alt.example.com"},
+			"DeviceCredential": "1111111111111111.2222222222222222222222222222222222222222222222222222222222222222",
 		},
 	})
 	if err != nil {
@@ -108,12 +106,6 @@ SUPPORTED_DOWNLOAD_COMPRESSION_TYPES = [0, 3]
 	if cfg.DeviceCredential != "1111111111111111.2222222222222222222222222222222222222222222222222222222222222222" {
 		t.Fatalf("unexpected device credential override: got=%q", cfg.DeviceCredential)
 	}
-	if len(cfg.SupportedUploadCompressionTypes) != 2 || cfg.SupportedUploadCompressionTypes[0] != 0 || cfg.SupportedUploadCompressionTypes[1] != 1 {
-		t.Fatalf("unexpected upload compression override: %+v", cfg.SupportedUploadCompressionTypes)
-	}
-	if len(cfg.SupportedDownloadCompressionTypes) != 3 {
-		t.Fatalf("unexpected download compression override: %+v", cfg.SupportedDownloadCompressionTypes)
-	}
 }
 
 func TestServerConfigFlagBinderBuildsOverridesForSetFlagsOnly(t *testing.T) {
@@ -128,7 +120,6 @@ func TestServerConfigFlagBinderBuildsOverridesForSetFlagsOnly(t *testing.T) {
 		"--fallback=[2001:db8::1]:5353",
 		"-domain=a.example.com,b.example.com",
 		"-use-external-socks5",
-		"-supported-upload-compression-types=0,1",
 		"-device-credential=0102030405060708.0000000000000000000000000000000000000000000000000000000000000000",
 	}); err != nil {
 		t.Fatalf("flag parse failed: %v", err)
@@ -150,10 +141,6 @@ func TestServerConfigFlagBinderBuildsOverridesForSetFlagsOnly(t *testing.T) {
 	gotDomains, ok := overrides.Values["Domain"].([]string)
 	if !ok || len(gotDomains) != 2 || gotDomains[0] != "a.example.com" || gotDomains[1] != "b.example.com" {
 		t.Fatalf("unexpected domains override: %#v", overrides.Values["Domain"])
-	}
-	gotCompressions, ok := overrides.Values["SupportedUploadCompressionTypes"].([]int)
-	if !ok || len(gotCompressions) != 2 || gotCompressions[0] != 0 || gotCompressions[1] != 1 {
-		t.Fatalf("unexpected compression override: %#v", overrides.Values["SupportedUploadCompressionTypes"])
 	}
 	if _, exists := overrides.Values["UDPHost"]; exists {
 		t.Fatalf("did not expect unset flag to appear in overrides: %#v", overrides.Values["UDPHost"])
@@ -324,9 +311,6 @@ MIN_ALLOWED_CLIENT_ARQ_INITIAL_RTO_SECONDS = 0.001
 	}
 	if cfg.ClientMaxARQDataNackMaxGap != 255 {
 		t.Fatalf("unexpected arq nack gap clamp: got=%d want=%d", cfg.ClientMaxARQDataNackMaxGap, 255)
-	}
-	if cfg.ClientMinCompressionMinSize != 65535 {
-		t.Fatalf("unexpected compression min size clamp: got=%d want=%d", cfg.ClientMinCompressionMinSize, 65535)
 	}
 	if cfg.ClientMinARQInitialRTOSeconds != 0.05 {
 		t.Fatalf("unexpected arq initial rto clamp: got=%f want=%f", cfg.ClientMinARQInitialRTOSeconds, 0.05)

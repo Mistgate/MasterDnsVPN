@@ -7,8 +7,8 @@ import (
 )
 
 const (
-	SessionAcceptPolicyPayloadSize = 13
-	SessionAcceptV1PolicySize      = 1 + 4 + SessionAcceptPolicyPayloadSize
+	SessionAcceptPolicyPayloadSize = 11
+	SessionAcceptV1PolicySize      = 4 + SessionAcceptPolicyPayloadSize
 
 	SessionPolicyScaledMin = 0.05
 	SessionPolicyScaledMax = 1.0
@@ -18,21 +18,10 @@ const (
 // plaintext of the ACCEPT is the session ID followed by the policy block:
 //
 //	byte 0      : session ID (outside the policy block)
-//	byte 1      : upload/download compression pair
-//	bytes 2-5   : verify code
-//	byte 6      : lower nibble = max packet duplication, upper nibble = max setup duplication
-//	byte 7      : max upload MTU
-//	bytes 8-9   : max download MTU
-//	byte 10     : max RX/TX workers
-//	byte 11     : min ping aggressive interval (scaled 0..255 => 0.05..1.00s)
-//	byte 12     : max packets per batch
-//	bytes 13-14 : max ARQ window size
-//	byte 15     : max ARQ data NACK max gap
-//	bytes 16-17 : min compression min size
-//	byte 18     : min ARQ initial RTO (scaled 0..255 => 0.05..1.00s)
+//	bytes 1-4   : verify code
+//	bytes 5-15  : the 11-byte client policy block (SessionAcceptClientPolicy)
 type SessionAcceptPayload struct {
 	SessionID           uint8
-	CompressionPair     uint8
 	VerifyCode          [4]byte
 	ClientPolicy        SessionAcceptClientPolicy
 	HasClientPolicySync bool
@@ -48,7 +37,6 @@ type SessionAcceptClientSettings struct {
 	MaxPacketsPerBatch          int
 	ARQWindowSize               int
 	ARQDataNackMaxGap           int
-	CompressionMinSize          int
 	ARQInitialRTOSeconds        float64
 	ARQControlInitialRTOSeconds float64
 	ARQMaxRTOSeconds            float64
@@ -56,7 +44,7 @@ type SessionAcceptClientSettings struct {
 }
 
 // SessionAcceptClientPolicy defines the server-side client limits/minimums
-// carried in the encrypted v1 ACCEPT policy, as a 13-byte block:
+// carried in the encrypted v1 ACCEPT policy, as an 11-byte block:
 //
 //	byte 0      : lower nibble = max packet duplication, upper nibble = max setup duplication
 //	byte 1      : max upload MTU (uint8)
@@ -66,8 +54,7 @@ type SessionAcceptClientSettings struct {
 //	byte 6      : max packets per batch (uint8)
 //	bytes 7-8   : max ARQ window size (uint16, big endian)
 //	byte 9      : max ARQ data NACK max gap (uint8)
-//	bytes 10-11 : min compression min-size (uint16, big endian)
-//	byte 12     : min ARQ initial RTO, scaled 0..255 => 0.05..1.00 seconds
+//	byte 10     : min ARQ initial RTO, scaled 0..255 => 0.05..1.00 seconds
 type SessionAcceptClientPolicy struct {
 	MaxPacketDuplicationCount int
 	MaxSetupDuplicationCount  int
@@ -78,7 +65,6 @@ type SessionAcceptClientPolicy struct {
 	MaxPacketsPerBatch        int
 	MaxARQWindowSize          int
 	MaxARQDataNackMaxGap      int
-	MinCompressionMinSize     int
 	MinARQInitialRTOSeconds   float64
 }
 
@@ -86,10 +72,9 @@ type SessionAcceptClientPolicy struct {
 // session ID in the v1 ACCEPT.
 func EncodeSessionAcceptV1Policy(payload SessionAcceptPayload) []byte {
 	buf := make([]byte, SessionAcceptV1PolicySize)
-	buf[0] = payload.CompressionPair
-	copy(buf[1:5], payload.VerifyCode[:])
+	copy(buf[0:4], payload.VerifyCode[:])
 	policy := EncodeSessionAcceptClientPolicy(payload.ClientPolicy)
-	copy(buf[5:], policy[:])
+	copy(buf[4:], policy[:])
 	return buf
 }
 
@@ -97,17 +82,16 @@ func DecodeSessionAcceptV1Policy(sessionID uint8, policy []byte) (SessionAcceptP
 	if len(policy) != SessionAcceptV1PolicySize {
 		return SessionAcceptPayload{}, fmt.Errorf("invalid v1 session policy length: got=%d want=%d", len(policy), SessionAcceptV1PolicySize)
 	}
-	clientPolicy, err := DecodeSessionAcceptClientPolicy(policy[5:])
+	clientPolicy, err := DecodeSessionAcceptClientPolicy(policy[4:])
 	if err != nil {
 		return SessionAcceptPayload{}, err
 	}
 	result := SessionAcceptPayload{
 		SessionID:           sessionID,
-		CompressionPair:     policy[0],
 		ClientPolicy:        clientPolicy,
 		HasClientPolicySync: true,
 	}
-	copy(result.VerifyCode[:], policy[1:5])
+	copy(result.VerifyCode[:], policy[0:4])
 	return result, nil
 }
 
@@ -126,7 +110,6 @@ func ApplySessionAcceptClientPolicy(current SessionAcceptClientSettings, policy 
 	current.MaxPacketsPerBatch = clampInt(current.MaxPacketsPerBatch, 1, maxInt(policy.MaxPacketsPerBatch, 1))
 	current.ARQWindowSize = clampInt(current.ARQWindowSize, 1, maxInt(policy.MaxARQWindowSize, 1))
 	current.ARQDataNackMaxGap = clampInt(current.ARQDataNackMaxGap, 0, maxInt(policy.MaxARQDataNackMaxGap, 0))
-	current.CompressionMinSize = maxInt(current.CompressionMinSize, maxInt(policy.MinCompressionMinSize, 1))
 	current.ARQInitialRTOSeconds = clampFloat64(current.ARQInitialRTOSeconds, policy.MinARQInitialRTOSeconds, current.ARQMaxRTOSeconds)
 	current.ARQControlInitialRTOSeconds = clampFloat64(current.ARQControlInitialRTOSeconds, policy.MinARQInitialRTOSeconds, current.ARQControlMaxRTOSeconds)
 	return current
@@ -144,8 +127,7 @@ func EncodeSessionAcceptClientPolicy(policy SessionAcceptClientPolicy) [SessionA
 	payload[6] = byte(clampInt(policy.MaxPacketsPerBatch, 0, 0xFF))
 	binary.BigEndian.PutUint16(payload[7:9], uint16(clampInt(policy.MaxARQWindowSize, 0, 0xFFFF)))
 	payload[9] = byte(clampInt(policy.MaxARQDataNackMaxGap, 0, 0xFF))
-	binary.BigEndian.PutUint16(payload[10:12], uint16(clampInt(policy.MinCompressionMinSize, 0, 0xFFFF)))
-	payload[12] = EncodeSessionScaledByte(policy.MinARQInitialRTOSeconds)
+	payload[10] = EncodeSessionScaledByte(policy.MinARQInitialRTOSeconds)
 
 	return payload
 }
@@ -165,8 +147,7 @@ func DecodeSessionAcceptClientPolicy(payload []byte) (SessionAcceptClientPolicy,
 		MaxPacketsPerBatch:        int(payload[6]),
 		MaxARQWindowSize:          int(binary.BigEndian.Uint16(payload[7:9])),
 		MaxARQDataNackMaxGap:      int(payload[9]),
-		MinCompressionMinSize:     int(binary.BigEndian.Uint16(payload[10:12])),
-		MinARQInitialRTOSeconds:   DecodeSessionScaledByte(payload[12]),
+		MinARQInitialRTOSeconds:   DecodeSessionScaledByte(payload[10]),
 	}, nil
 }
 

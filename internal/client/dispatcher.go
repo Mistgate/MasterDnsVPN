@@ -352,13 +352,7 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 		opts := VpnProto.BuildOptions{
 			SessionID:  c.sessionID,
 			PacketType: finalPacketType,
-			CompressionType: func() uint8 {
-				if wasPacked {
-					return c.uploadCompression
-				}
-				return item.CompressionType
-			}(),
-			Payload: finalPayload,
+			Payload:    finalPayload,
 		}
 
 		if wasPacked {

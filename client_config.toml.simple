@@ -160,25 +160,7 @@ FD_CONTROL_UNIX_SOCKET = ""
 BASE_ENCODE_DATA = false
 
 # ------------------------------------------------------------------------------
-# 5) Compression
-# What this section does:
-# - Controls payload compression negotiation for upload and download directions.
-# ------------------------------------------------------------------------------
-
-# Allowed values:
-# 0 = OFF
-# 1 = ZSTD
-# 2 = LZ4
-# 3 = ZLIB
-UPLOAD_COMPRESSION_TYPE = 0
-DOWNLOAD_COMPRESSION_TYPE = 0
-
-# Minimum payload size before compression is attempted.
-# Must be >= 120.
-COMPRESSION_MIN_SIZE = 120
-
-# ------------------------------------------------------------------------------
-# 6) MTU Discovery
+# 5) MTU Discovery
 # What this section does:
 # - Controls initial resolver validation and MTU discovery.
 # - Controls optional export/logging of working resolver MTUs.
@@ -282,7 +264,7 @@ RUNTIME_STATS_INTERVAL_SECONDS = 60.0
 INTERACTIVE_STATS_ENABLED = false
 
 # ------------------------------------------------------------------------------
-# 7) Runtime Workers, Queues, and Timers
+# 6) Runtime Workers, Queues, and Timers
 # What this section does:
 # - Controls async reader/writer/processor worker counts.
 # - Controls queue sizes and dispatcher polling.
@@ -349,7 +331,7 @@ PING_COOL_THRESHOLD_SECONDS = 20.0
 PING_COLD_THRESHOLD_SECONDS = 30.0
 
 # ------------------------------------------------------------------------------
-# 8) ARQ Reliability & Priority Packing
+# 7) ARQ Reliability & Priority Packing
 # What this section does:
 # - Controls data/control retransmission behavior.
 # - Controls per-stream buffering limits and batch packing.
@@ -388,7 +370,7 @@ ARQ_TERMINAL_DRAIN_TIMEOUT_SECONDS = 120.0
 ARQ_TERMINAL_ACK_WAIT_TIMEOUT_SECONDS = 90.0
 
 # ------------------------------------------------------------------------------
-# 9) Logging
+# 8) Logging
 # What this section does:
 # - Controls console/file logger verbosity.
 # ------------------------------------------------------------------------------

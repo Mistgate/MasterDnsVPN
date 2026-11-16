@@ -76,7 +76,7 @@ func startAcceptanceResolver(t *testing.T, server string, delay time.Duration, d
 				if decision.Action == domainmatcher.ActionProcess {
 					wire, err := baseCodec.DecodeString(decision.Labels)
 					_, probe, openErr := security.OpenProbe(wire, index)
-					packet, parseErr := vpnproto.ParseInflated(probe.Payload)
+					packet, parseErr := vpnproto.Parse(probe.Payload)
 					if err == nil && openErr == nil && parseErr == nil && (packet.PacketType == enums.PACKET_MTU_UP_REQ || packet.PacketType == enums.PACKET_MTU_DOWN_REQ) {
 						r.mu.Lock()
 						r.probeTimes = append(r.probeTimes, receivedAt)

@@ -12,12 +12,12 @@ All integers are big endian. `kid` is 8 bytes, the device key `psk` is 32 bytes.
 
 | Message | Layout |
 | --- | --- |
-| INIT (71 bytes) | `ver 1 \| kid 8 \| ts 4 \| e_c 32 \| AEAD_psk(10 parameter bytes)`; AAD = the first 45 bytes; nonce = first 12 bytes of SHA-256(`"masterdnsvpn-go/init/v1"` \|\| header) |
+| INIT (70 bytes) | `ver 1 \| kid 8 \| ts 4 \| e_c 32 \| AEAD_psk(9 parameter bytes)`; AAD = the first 45 bytes; nonce = first 12 bytes of SHA-256(`"masterdnsvpn-go/init/v1"` \|\| header) |
 | ACCEPT | `e_s 32 \| AEAD_psk(sid 1 \| policy)`; AAD = `"masterdnsvpn-go/accept-aad/v1"` \|\| INIT \|\| e_s; nonce = first 12 bytes of SHA-256(`"masterdnsvpn-go/accept/v1"` \|\| INIT \|\| e_s) |
 | Session keys | HKDF-SHA256(ikm = psk \|\| X25519(e_c, e_s), salt = SHA-256(INIT \|\| ACCEPT), info = `"masterdnsvpn-go v1 client-to-server"` or `"... server-to-client"`), 32 bytes each |
 | Frame (both directions) | `sid 1 \| ctr 4 \| AEAD_dirkey(inner packet)`; nonce = 8 zero bytes \|\| ctr; AAD = `ver 1 \| sid \| ctr` |
 | Pre-session probe and its answer | `ver 1 \| kind 0x50 \| kid 8 \| nonce 12 (ts 4 \| random 8) \| AEAD_psk(inner packet)`; AAD = header |
-| Inner packet | `type 1 \|` the stream, sequence, fragment and compression fields that the type carries `\| payload` (8 header bytes for STREAM_DATA, 1 for PING) |
+| Inner packet | `type 1 \|` the stream, sequence and fragment fields that the type carries `\| payload` (7 header bytes for STREAM_DATA, 1 for PING) |
 
 A server accepts an INIT or probe whose timestamp is within 120 seconds of its clock. A repeated identical INIT within that time returns the cached ACCEPT (at most 16 times per INIT); the server never builds a second ACCEPT or session for one INIT. The frame counter starts at 0 for each direction and each session, a receiver keeps a 2048-frame replay window, the client ends the session after 2^31 frames in a direction, and the cipher refuses to seal after 2^32 - 1 (then the silent downlink ends the session from the other side).
 

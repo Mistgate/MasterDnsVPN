@@ -19,7 +19,6 @@ import (
 	"time"
 
 	baseCodec "masterdnsvpn-go/internal/basecodec"
-	"masterdnsvpn-go/internal/compression"
 	Enums "masterdnsvpn-go/internal/enums"
 	fragmentStore "masterdnsvpn-go/internal/fragmentstore"
 	"masterdnsvpn-go/internal/mlq"
@@ -33,7 +32,7 @@ var (
 )
 
 const (
-	sessionInitPayloadSize = 10
+	sessionInitPayloadSize = security.InitParametersSize
 	sessionBusyPayloadSize = 4
 	// sessionInitMaxAge is how long one INIT may be retried before a fresh one
 	// is built; the server accepts a timestamp within 120 s.
@@ -172,13 +171,11 @@ func (c *Client) applySessionInitPacket(message []byte, verifyCode [4]byte) erro
 	c.sessionID = accepted.SessionID
 	c.sessionCipher = cipher
 	c.responseMode = c.sessionInitPayload[0]
-	c.uploadCompression, c.downloadCompression = compression.SplitPair(sessionAccept.CompressionPair)
 	if sessionAccept.HasClientPolicySync {
 		c.applySessionClientPolicy(sessionAccept.ClientPolicy)
 	}
 	c.sessionReady = true
 	c.lastAuthRxUnixNano.Store(time.Now().UnixNano())
-	c.applySessionCompressionPolicy()
 	c.clearSessionInitBusyUntil()
 	c.resetSessionInitStateLocked()
 	c.clearSessionResetPending()
@@ -200,7 +197,6 @@ func (c *Client) applySessionClientPolicy(policy VpnProto.SessionAcceptClientPol
 		MaxPacketsPerBatch:          c.cfg.MaxPacketsPerBatch,
 		ARQWindowSize:               c.cfg.ARQWindowSize,
 		ARQDataNackMaxGap:           c.cfg.ARQDataNackMaxGap,
-		CompressionMinSize:          c.cfg.CompressionMinSize,
 		ARQInitialRTOSeconds:        c.cfg.ARQInitialRTOSeconds,
 		ARQControlInitialRTOSeconds: c.cfg.ARQControlInitialRTOSeconds,
 		ARQMaxRTOSeconds:            c.cfg.ARQMaxRTOSeconds,
@@ -217,7 +213,6 @@ func (c *Client) applySessionClientPolicy(policy VpnProto.SessionAcceptClientPol
 		MaxPacketsPerBatch:          before.MaxPacketsPerBatch,
 		ARQWindowSize:               before.ARQWindowSize,
 		ARQDataNackMaxGap:           before.ARQDataNackMaxGap,
-		CompressionMinSize:          before.CompressionMinSize,
 		ARQInitialRTOSeconds:        before.ARQInitialRTOSeconds,
 		ARQControlInitialRTOSeconds: before.ARQControlInitialRTOSeconds,
 		ARQMaxRTOSeconds:            before.ARQMaxRTOSeconds,
@@ -234,7 +229,6 @@ func (c *Client) applySessionClientPolicy(policy VpnProto.SessionAcceptClientPol
 	c.cfg.MaxPacketsPerBatch = settings.MaxPacketsPerBatch
 	c.cfg.ARQWindowSize = settings.ARQWindowSize
 	c.cfg.ARQDataNackMaxGap = settings.ARQDataNackMaxGap
-	c.cfg.CompressionMinSize = settings.CompressionMinSize
 	c.cfg.ARQInitialRTOSeconds = settings.ARQInitialRTOSeconds
 	c.cfg.ARQControlInitialRTOSeconds = settings.ARQControlInitialRTOSeconds
 	c.cfg.TunnelProcessWorkers = deriveSessionPolicyTunnelProcessWorkers(c.cfg.TunnelProcessWorkers, c.cfg.RX_TX_Workers)
@@ -346,7 +340,6 @@ func (c *Client) logSessionClientPolicyChanges(before VpnProto.SessionAcceptClie
 	logInt("MAX_PACKETS_PER_BATCH", before.MaxPacketsPerBatch, after.MaxPacketsPerBatch, "max="+itoaSafe(policy.MaxPacketsPerBatch))
 	logInt("ARQ_WINDOW_SIZE", before.ARQWindowSize, after.ARQWindowSize, "max="+itoaSafe(policy.MaxARQWindowSize))
 	logInt("ARQ_DATA_NACK_MAX_GAP", before.ARQDataNackMaxGap, after.ARQDataNackMaxGap, "max="+itoaSafe(policy.MaxARQDataNackMaxGap))
-	logInt("COMPRESSION_MIN_SIZE", before.CompressionMinSize, after.CompressionMinSize, "min="+itoaSafe(policy.MinCompressionMinSize))
 	logFloat("ARQ_INITIAL_RTO_SECONDS", before.ARQInitialRTOSeconds, after.ARQInitialRTOSeconds, "min="+formatPolicyFloat(policy.MinARQInitialRTOSeconds))
 	logFloat("ARQ_CONTROL_INITIAL_RTO_SECONDS", before.ARQControlInitialRTOSeconds, after.ARQControlInitialRTOSeconds, "min="+formatPolicyFloat(policy.MinARQInitialRTOSeconds))
 }
@@ -371,10 +364,9 @@ func (c *Client) buildSessionInitPayload() ([]byte, bool, [4]byte, error) {
 	if c.cfg.BaseEncodeData {
 		payload[0] = mtuProbeBase64Reply
 	}
-	payload[1] = compression.PackPair(c.uploadCompression, c.downloadCompression)
-	binary.BigEndian.PutUint16(payload[2:4], uint16(c.syncedUploadMTU))
-	binary.BigEndian.PutUint16(payload[4:6], uint16(c.syncedDownloadMTU))
-	copy(payload[6:10], verifyCode[:])
+	binary.BigEndian.PutUint16(payload[1:3], uint16(c.syncedUploadMTU))
+	binary.BigEndian.PutUint16(payload[3:5], uint16(c.syncedDownloadMTU))
+	copy(payload[5:9], verifyCode[:])
 	var parameters [security.InitParametersSize]byte
 	copy(parameters[:], payload)
 	handshake, message, err := security.NewClientHandshake(c.credential, parameters, time.Now(), nil)
@@ -610,80 +602,10 @@ func (c *Client) applySyncedMTUState(uploadMTU int, downloadMTU int, uploadChars
 	c.syncedUploadChars = uploadChars
 	c.safeUploadMTU = computeSafeUploadMTU(uploadMTU, c.mtuCryptoOverhead)
 	c.maxPackedBlocks = VpnProto.CalculateMaxPackedBlocks(uploadMTU, 80, c.cfg.MaxPacketsPerBatch)
-	c.applySessionCompressionPolicy()
 	if c.balancer != nil {
 		c.balancer.SetSessionSynchronizedMTU(uploadMTU, downloadMTU)
 	}
 	if c.log != nil && c.successMTUChecks {
 		c.log.Infof("\U0001F4CF <green>MTU state applied: UP=%d, DOWN=%d</green>", uploadMTU, downloadMTU)
-	}
-}
-
-func (c *Client) applySessionCompressionPolicy() {
-	if c == nil {
-		return
-	}
-
-	minSize := c.cfg.CompressionMinSize
-	if minSize <= 0 {
-		minSize = compression.DefaultMinSize
-	}
-
-	uploadCompression := compression.NormalizeAvailableType(c.uploadCompression)
-	downloadCompression := compression.NormalizeAvailableType(c.downloadCompression)
-
-	const mtuWarningThreshold = 100
-
-	if c.syncedUploadMTU > 0 && c.syncedUploadMTU < mtuWarningThreshold {
-		if uploadCompression != compression.TypeOff && c.log != nil {
-			c.log.Warnf(
-				"⚠️ <red>Session Compression Upload: <cyan>%s</cyan> (Disabled due to low MTU: <cyan>%d</cyan>)</red>",
-				compression.TypeName(uploadCompression),
-				c.syncedUploadMTU,
-			)
-		}
-		uploadCompression = compression.TypeOff
-		c.cfg.UploadCompressionType = int(compression.TypeOff)
-	} else if c.syncedUploadMTU > 0 && c.syncedUploadMTU <= minSize {
-		if uploadCompression != compression.TypeOff && c.log != nil {
-			c.log.Infof(
-				"\U0001F5DC <green>Session Compression Upload: <cyan>%s</cyan> (Disabled due to MinSize MTU: <cyan>%d</cyan>)</green>",
-				compression.TypeName(uploadCompression),
-				c.syncedUploadMTU,
-			)
-		}
-		uploadCompression = compression.TypeOff
-	}
-
-	if c.syncedDownloadMTU > 0 && c.syncedDownloadMTU < mtuWarningThreshold {
-		if downloadCompression != compression.TypeOff && c.log != nil {
-			c.log.Warnf(
-				"⚠️ <red>Session Compression Download: <cyan>%s</cyan> (Disabled due to low MTU: <cyan>%d</cyan>)</red>",
-				compression.TypeName(downloadCompression),
-				c.syncedDownloadMTU,
-			)
-		}
-		downloadCompression = compression.TypeOff
-		c.cfg.DownloadCompressionType = int(compression.TypeOff)
-	} else if c.syncedDownloadMTU > 0 && c.syncedDownloadMTU <= minSize {
-		if downloadCompression != compression.TypeOff && c.log != nil {
-			c.log.Infof(
-				"\U0001F5DC <green>Session Compression Download: <cyan>%s</cyan> (Disabled due to MinSize MTU: <cyan>%d</cyan>)</green>",
-				compression.TypeName(downloadCompression),
-				c.syncedDownloadMTU,
-			)
-		}
-		downloadCompression = compression.TypeOff
-	}
-
-	c.uploadCompression = uploadCompression
-	c.downloadCompression = downloadCompression
-
-	if c.log != nil {
-		c.log.Infof(
-			"\U0001F9E9 <green>Effective Compression Upload: <cyan>%s</cyan> Download: <cyan>%s</cyan></green>",
-			compression.TypeName(c.uploadCompression),
-			compression.TypeName(c.downloadCompression),
-		)
 	}
 }

@@ -1421,7 +1421,7 @@ func (c *Client) extractMTUProbeResponse(response []byte, base64Reply bool) (Vpn
 	if err != nil {
 		return VpnProto.Packet{}, err
 	}
-	return VpnProto.ParseInflated(probe.Payload)
+	return VpnProto.Parse(probe.Payload)
 }
 
 func (c *Client) maxUploadMTUPayload(domain string) int {
@@ -1557,14 +1557,13 @@ func (c *Client) encodedCharsForPacketPayload(packetType uint8, payloadLen int) 
 
 	payload := buf[:payloadLen]
 	raw, err := VpnProto.BuildRaw(VpnProto.BuildOptions{
-		SessionID:       255,
-		PacketType:      packetType,
-		StreamID:        0xFFFF,
-		SequenceNum:     0xFFFF,
-		FragmentID:      0xFF,
-		TotalFragments:  0xFF,
-		CompressionType: 0xFF,
-		Payload:         payload,
+		SessionID:      255,
+		PacketType:     packetType,
+		StreamID:       0xFFFF,
+		SequenceNum:    0xFFFF,
+		FragmentID:     0xFF,
+		TotalFragments: 0xFF,
+		Payload:        payload,
 	})
 
 	if err != nil {

@@ -23,7 +23,6 @@ func buildRawPacket(
 	sequenceNum uint16,
 	fragmentID uint8,
 	totalFragments uint8,
-	compressionType uint8,
 	payload []byte,
 ) []byte {
 	t.Helper()
@@ -39,15 +38,12 @@ func buildRawPacket(
 	if hasFragmentExtension(packetType) {
 		raw = append(raw, fragmentID, totalFragments)
 	}
-	if hasCompressionExtension(packetType) {
-		raw = append(raw, compressionType)
-	}
 	return append(raw, payload...)
 }
 
 func TestParseSessionInitPacket(t *testing.T) {
 	payload := []byte("hello")
-	raw := buildRawPacket(t, Enums.PACKET_SESSION_INIT, 0, 0, 0, 0, 0, payload)
+	raw := buildRawPacket(t, Enums.PACKET_SESSION_INIT, 0, 0, 0, 0, payload)
 
 	parsed, err := Parse(raw)
 	if err != nil {
@@ -57,7 +53,7 @@ func TestParseSessionInitPacket(t *testing.T) {
 	if parsed.PacketType != Enums.PACKET_SESSION_INIT {
 		t.Fatalf("unexpected base fields: %+v", parsed)
 	}
-	if parsed.HasStreamID || parsed.HasSequenceNum || parsed.HasFragmentInfo || parsed.HasCompressionType {
+	if parsed.HasStreamID || parsed.HasSequenceNum || parsed.HasFragmentInfo {
 		t.Fatalf("unexpected optional fields for session init: %+v", parsed)
 	}
 	if !bytes.Equal(parsed.Payload, payload) {
@@ -67,7 +63,7 @@ func TestParseSessionInitPacket(t *testing.T) {
 
 func TestParseStreamDataPacket(t *testing.T) {
 	payload := []byte("vpn-data")
-	raw := buildRawPacket(t, Enums.PACKET_STREAM_DATA, 0x1122, 0x3344, 5, 9, 2, payload)
+	raw := buildRawPacket(t, Enums.PACKET_STREAM_DATA, 0x1122, 0x3344, 5, 9, payload)
 
 	parsed, err := Parse(raw)
 	if err != nil {
@@ -83,11 +79,8 @@ func TestParseStreamDataPacket(t *testing.T) {
 	if !parsed.HasFragmentInfo || parsed.FragmentID != 5 || parsed.TotalFragments != 9 {
 		t.Fatalf("unexpected fragment info: %+v", parsed)
 	}
-	if !parsed.HasCompressionType || parsed.CompressionType != 2 {
-		t.Fatalf("unexpected compression info: %+v", parsed)
-	}
-	if parsed.HeaderLength != 8 {
-		t.Fatalf("unexpected header length: got=%d want=%d", parsed.HeaderLength, 8)
+	if parsed.HeaderLength != 7 {
+		t.Fatalf("unexpected header length: got=%d want=%d", parsed.HeaderLength, 7)
 	}
 	if !bytes.Equal(parsed.Payload, payload) {
 		t.Fatalf("unexpected payload: got=%q want=%q", parsed.Payload, payload)
@@ -97,32 +90,31 @@ func TestParseStreamDataPacket(t *testing.T) {
 func TestPacketBuilderLeavesOnlyInnerFieldsInPlaintext(t *testing.T) {
 	payload := []byte("payload")
 	built, err := BuildRaw(BuildOptions{
-		SessionID:       3,
-		PacketType:      Enums.PACKET_STREAM_DATA,
-		StreamID:        100,
-		SequenceNum:     200,
-		FragmentID:      1,
-		TotalFragments:  2,
-		CompressionType: 1,
-		Payload:         payload,
+		SessionID:      3,
+		PacketType:     Enums.PACKET_STREAM_DATA,
+		StreamID:       100,
+		SequenceNum:    200,
+		FragmentID:     1,
+		TotalFragments: 2,
+		Payload:        payload,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := buildRawPacket(t, Enums.PACKET_STREAM_DATA, 100, 200, 1, 2, 1, payload)
+	want := buildRawPacket(t, Enums.PACKET_STREAM_DATA, 100, 200, 1, 2, payload)
 	if !bytes.Equal(built, want) {
 		t.Fatalf("BuildRaw layout mismatch: got %x want %x", built, want)
 	}
-	if len(built) != 8+len(payload) {
-		t.Fatalf("inner STREAM_DATA header must be 8 bytes (type, stream, seq, frag id/total, compression), got %d", len(built)-len(payload))
+	if len(built) != 7+len(payload) {
+		t.Fatalf("inner STREAM_DATA header must be 7 bytes (type, stream, seq, frag id/total), got %d", len(built)-len(payload))
 	}
 	if HeaderRawSize(Enums.PACKET_PING) != 1 {
 		t.Fatalf("PING inner header must be one byte, got %d", HeaderRawSize(Enums.PACKET_PING))
 	}
 }
 
-func FuzzParseInflated(f *testing.F) {
-	f.Add(append([]byte{Enums.PACKET_STREAM_DATA, 0, 1, 0, 2, 0, 1, 0}, "payload"...))
+func FuzzParse(f *testing.F) {
+	f.Add(append([]byte{Enums.PACKET_STREAM_DATA, 0, 1, 0, 2, 0, 1}, "payload"...))
 	f.Add([]byte{Enums.PACKET_PING})
 	f.Add([]byte{})
 	f.Add(bytes.Repeat([]byte{0xff}, 32))
@@ -130,7 +122,7 @@ func FuzzParseInflated(f *testing.F) {
 		if len(data) > 1<<16 {
 			return
 		}
-		packet, err := ParseInflated(data)
+		packet, err := Parse(data)
 		if err == nil && packet.HeaderLength > len(data) {
 			t.Fatalf("header length %d beyond input %d", packet.HeaderLength, len(data))
 		}

@@ -25,14 +25,13 @@ type MockPacketEnqueuer struct {
 type RejectingPacketEnqueuer struct{}
 
 type capturedPacket struct {
-	priority        int
-	packetType      uint8
-	sequenceNum     uint16
-	fragmentID      uint8
-	totalFragments  uint8
-	compressionType uint8
-	ttl             time.Duration
-	payload         []byte
+	priority       int
+	packetType     uint8
+	sequenceNum    uint16
+	fragmentID     uint8
+	totalFragments uint8
+	ttl            time.Duration
+	payload        []byte
 }
 
 func NewMockPacketEnqueuer() *MockPacketEnqueuer {
@@ -42,7 +41,7 @@ func NewMockPacketEnqueuer() *MockPacketEnqueuer {
 	}
 }
 
-func (m *MockPacketEnqueuer) PushTXPacket(priority int, packetType uint8, sequenceNum uint16, fragmentID uint8, totalFragments uint8, compressionType uint8, ttl time.Duration, payload []byte) bool {
+func (m *MockPacketEnqueuer) PushTXPacket(priority int, packetType uint8, sequenceNum uint16, fragmentID uint8, totalFragments uint8, ttl time.Duration, payload []byte) bool {
 	m.mu.Lock()
 	if packetType == Enums.PACKET_STREAM_DATA_NACK {
 		m.queuedNackSeqs[sequenceNum] = struct{}{}
@@ -50,14 +49,13 @@ func (m *MockPacketEnqueuer) PushTXPacket(priority int, packetType uint8, sequen
 	m.mu.Unlock()
 
 	m.Packets <- capturedPacket{
-		priority:        priority,
-		packetType:      packetType,
-		sequenceNum:     sequenceNum,
-		fragmentID:      fragmentID,
-		totalFragments:  totalFragments,
-		compressionType: compressionType,
-		ttl:             ttl,
-		payload:         append([]byte(nil), payload...),
+		priority:       priority,
+		packetType:     packetType,
+		sequenceNum:    sequenceNum,
+		fragmentID:     fragmentID,
+		totalFragments: totalFragments,
+		ttl:            ttl,
+		payload:        append([]byte(nil), payload...),
 	}
 	return true
 }
@@ -80,7 +78,7 @@ func (m *MockPacketEnqueuer) RemoveQueuedDataNack(sequenceNum uint16) bool {
 	return true
 }
 
-func (RejectingPacketEnqueuer) PushTXPacket(priority int, packetType uint8, sequenceNum uint16, fragmentID uint8, totalFragments uint8, compressionType uint8, ttl time.Duration, payload []byte) bool {
+func (RejectingPacketEnqueuer) PushTXPacket(priority int, packetType uint8, sequenceNum uint16, fragmentID uint8, totalFragments uint8, ttl time.Duration, payload []byte) bool {
 	return false
 }
 
@@ -648,11 +646,10 @@ func TestARQ_HandleDataNackQueuesImmediateResend(t *testing.T) {
 
 	a.mu.Lock()
 	a.sndBuf[7] = &arqDataItem{
-		Data:            []byte("hello"),
-		CreatedAt:       time.Now(),
-		LastSentAt:      time.Now().Add(-time.Second),
-		CurrentRTO:      a.rto,
-		CompressionType: 3,
+		Data:       []byte("hello"),
+		CreatedAt:  time.Now(),
+		LastSentAt: time.Now().Add(-time.Second),
+		CurrentRTO: a.rto,
 	}
 	a.mu.Unlock()
 
@@ -693,11 +690,10 @@ func TestARQ_HandleDataNackSuppressesImmediateDuplicateResend(t *testing.T) {
 
 	a.mu.Lock()
 	a.sndBuf[7] = &arqDataItem{
-		Data:            []byte("hello"),
-		CreatedAt:       time.Now(),
-		LastSentAt:      time.Now().Add(-time.Second),
-		CurrentRTO:      a.rto,
-		CompressionType: 3,
+		Data:       []byte("hello"),
+		CreatedAt:  time.Now(),
+		LastSentAt: time.Now().Add(-time.Second),
+		CurrentRTO: a.rto,
 	}
 	a.mu.Unlock()
 
@@ -2293,12 +2289,11 @@ func TestARQ_DataRetransmitDoesNotAdvanceRetryOrRTOWhenEnqueueRejected(t *testin
 	now := time.Now()
 	a.mu.Lock()
 	a.sndBuf[9] = &arqDataItem{
-		Data:            []byte("payload"),
-		CreatedAt:       now.Add(-time.Second),
-		LastSentAt:      now.Add(-time.Second),
-		Retries:         2,
-		CurrentRTO:      200 * time.Millisecond,
-		CompressionType: 0,
+		Data:       []byte("payload"),
+		CreatedAt:  now.Add(-time.Second),
+		LastSentAt: now.Add(-time.Second),
+		Retries:    2,
+		CurrentRTO: 200 * time.Millisecond,
 	}
 	beforeLastSent := a.sndBuf[9].LastSentAt
 	beforeRetries := a.sndBuf[9].Retries
@@ -2335,14 +2330,13 @@ func TestARQ_CheckRetransmitsSkipsUndispatchedData(t *testing.T) {
 
 	now := time.Now()
 	a.sndBuf[9] = &arqDataItem{
-		Data:            []byte("queued"),
-		CreatedAt:       now.Add(-time.Second),
-		LastSentAt:      time.Time{},
-		Dispatched:      false,
-		Retries:         0,
-		CurrentRTO:      100 * time.Millisecond,
-		SampleEligible:  true,
-		CompressionType: 0,
+		Data:           []byte("queued"),
+		CreatedAt:      now.Add(-time.Second),
+		LastSentAt:     time.Time{},
+		Dispatched:     false,
+		Retries:        0,
+		CurrentRTO:     100 * time.Millisecond,
+		SampleEligible: true,
 	}
 
 	a.checkRetransmits()
@@ -2365,14 +2359,13 @@ func TestARQ_CheckRetransmitsUsesActualDequeueTime(t *testing.T) {
 
 	now := time.Now()
 	a.sndBuf[9] = &arqDataItem{
-		Data:            []byte("queued"),
-		CreatedAt:       now.Add(-time.Second),
-		LastSentAt:      time.Time{},
-		Dispatched:      false,
-		Retries:         0,
-		CurrentRTO:      100 * time.Millisecond,
-		SampleEligible:  true,
-		CompressionType: 0,
+		Data:           []byte("queued"),
+		CreatedAt:      now.Add(-time.Second),
+		LastSentAt:     time.Time{},
+		Dispatched:     false,
+		Retries:        0,
+		CurrentRTO:     100 * time.Millisecond,
+		SampleEligible: true,
 	}
 
 	a.NoteTXPacketDequeued(Enums.PACKET_STREAM_DATA, 9, 0)

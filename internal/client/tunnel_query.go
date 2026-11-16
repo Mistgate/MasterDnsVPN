@@ -51,8 +51,8 @@ func (c *Client) buildTunnelTXTQueryRaw(domain string, options VpnProto.BuildOpt
 	return buildTunnelTXTQuestionBytes(domain, encoded)
 }
 
-func (c *Client) buildEncodedAutoWithCompressionTrace(options VpnProto.BuildOptions) ([]byte, error) {
-	raw, err := VpnProto.BuildRawAuto(options, c.cfg.CompressionMinSize)
+func (c *Client) buildEncodedFrame(options VpnProto.BuildOptions) ([]byte, error) {
+	raw, err := VpnProto.BuildRaw(options)
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +69,7 @@ func (c *Client) buildEncodedAutoWithCompressionTrace(options VpnProto.BuildOpti
 
 // buildTunnelTXTQuery builds an encoded tunnel query with automatic option handling.
 func (c *Client) buildTunnelTXTQuery(domain string, options VpnProto.BuildOptions) ([]byte, error) {
-	encoded, err := c.buildEncodedAutoWithCompressionTrace(options)
+	encoded, err := c.buildEncodedFrame(options)
 	if err != nil {
 		return nil, err
 	}

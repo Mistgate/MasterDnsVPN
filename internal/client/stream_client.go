@@ -150,7 +150,6 @@ func (c *Client) new_stream(streamID uint16, conn net.Conn, targetPayload []byte
 		ControlPacketTTL:            c.cfg.ARQControlPacketTTLSeconds,
 		TerminalDrainTimeout:        c.cfg.ARQTerminalDrainTimeoutSec,
 		TerminalAckWaitTimeout:      c.cfg.ARQTerminalAckWaitTimeoutSec,
-		CompressionType:             c.uploadCompression,
 		IsClient:                    true,
 	}
 
@@ -183,7 +182,7 @@ func (c *Client) new_stream(streamID uint16, conn net.Conn, targetPayload []byte
 }
 
 // PushTXPacket adds a packet to the appropriate priority queue if it's not a duplicate.
-func (s *Stream_client) PushTXPacket(priority int, packetType uint8, sequenceNum uint16, fragmentID uint8, totalFragments uint8, compressionType uint8, ttl time.Duration, payload []byte) bool {
+func (s *Stream_client) PushTXPacket(priority int, packetType uint8, sequenceNum uint16, fragmentID uint8, totalFragments uint8, ttl time.Duration, payload []byte) bool {
 	dataKey := Enums.PacketIdentityKey(s.StreamID, Enums.PACKET_STREAM_DATA, sequenceNum, fragmentID)
 	resendKey := Enums.PacketIdentityKey(s.StreamID, Enums.PACKET_STREAM_RESEND, sequenceNum, fragmentID)
 	key := Enums.PacketIdentityKey(s.StreamID, packetType, sequenceNum, fragmentID)
@@ -205,7 +204,6 @@ func (s *Stream_client) PushTXPacket(priority int, packetType uint8, sequenceNum
 	p.SequenceNum = sequenceNum
 	p.FragmentID = fragmentID
 	p.TotalFragments = totalFragments
-	p.CompressionType = compressionType
 	p.Payload = payload
 	p.CreatedAt = time.Now()
 	p.TTL = ttl
@@ -597,7 +595,6 @@ func (c *Client) InitVirtualStream0() {
 		ControlPacketTTL:            999999.0,
 		TerminalDrainTimeout:        c.cfg.ARQTerminalDrainTimeoutSec,
 		TerminalAckWaitTimeout:      c.cfg.ARQTerminalAckWaitTimeoutSec,
-		CompressionType:             c.uploadCompression,
 	}
 
 	conn := newFakeConn()

@@ -60,8 +60,6 @@ type Server struct {
 	dnsFragmentTimeout      time.Duration
 	resolveDNSQueryFn       func([]byte) ([]byte, error)
 	dialStreamUpstreamFn    func(string, string, time.Duration) (net.Conn, error)
-	uploadCompressionMask   uint8
-	downloadCompressionMask uint8
 	dropLogIntervalNanos    int64
 	socksConnectTimeout     time.Duration
 	useExternalSOCKS5       bool
@@ -151,15 +149,13 @@ func New(cfg config.ServerConfig, log *logger.Logger) *Server {
 		dialStreamUpstreamFn: func(network string, address string, timeout time.Duration) (net.Conn, error) {
 			return net.DialTimeout(network, address, timeout)
 		},
-		uploadCompressionMask:   buildCompressionMask(cfg.SupportedUploadCompressionTypes),
-		downloadCompressionMask: buildCompressionMask(cfg.SupportedDownloadCompressionTypes),
-		dropLogIntervalNanos:    dropLogInterval.Nanoseconds(),
-		socksConnectTimeout:     socksConnectTimeout,
-		useExternalSOCKS5:       cfg.UseExternalSOCKS5,
-		externalSOCKS5Address:   net.JoinHostPort(cfg.ForwardIP, strconv.Itoa(cfg.ForwardPort)),
-		externalSOCKS5Auth:      cfg.SOCKS5Auth,
-		externalSOCKS5User:      []byte(cfg.SOCKS5User),
-		externalSOCKS5Pass:      []byte(cfg.SOCKS5Pass),
+		dropLogIntervalNanos:  dropLogInterval.Nanoseconds(),
+		socksConnectTimeout:   socksConnectTimeout,
+		useExternalSOCKS5:     cfg.UseExternalSOCKS5,
+		externalSOCKS5Address: net.JoinHostPort(cfg.ForwardIP, strconv.Itoa(cfg.ForwardPort)),
+		externalSOCKS5Auth:    cfg.SOCKS5Auth,
+		externalSOCKS5User:    []byte(cfg.SOCKS5User),
+		externalSOCKS5Pass:    []byte(cfg.SOCKS5Pass),
 		mtuProbePayloadPool: sync.Pool{
 			New: func() any {
 				return make([]byte, mtuProbeMaxDownSize)

@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"masterdnsvpn-go/internal/compression"
 	"masterdnsvpn-go/internal/config"
 	DnsParser "masterdnsvpn-go/internal/dnsparser"
 	Enums "masterdnsvpn-go/internal/enums"
@@ -54,7 +53,6 @@ func TestApplySessionInitPacketAppliesServerClientPolicy(t *testing.T) {
 		MaxPacketsPerBatch:            20,
 		ARQWindowSize:                 9000,
 		ARQDataNackMaxGap:             256,
-		CompressionMinSize:            10,
 		ARQInitialRTOSeconds:          0.01,
 		ARQMaxRTOSeconds:              5.0,
 		ARQControlInitialRTOSeconds:   0.01,
@@ -67,9 +65,8 @@ func TestApplySessionInitPacketAppliesServerClientPolicy(t *testing.T) {
 
 	verifyCode := [4]byte{1, 2, 3, 4}
 	acceptPayload := VpnProto.SessionAcceptPayload{
-		SessionID:       7,
-		CompressionPair: compression.PackPair(compression.TypeOff, compression.TypeOff),
-		VerifyCode:      verifyCode,
+		SessionID:  7,
+		VerifyCode: verifyCode,
 		ClientPolicy: VpnProto.SessionAcceptClientPolicy{
 			MaxPacketDuplicationCount: 5,
 			MaxSetupDuplicationCount:  6,
@@ -80,7 +77,6 @@ func TestApplySessionInitPacketAppliesServerClientPolicy(t *testing.T) {
 			MaxPacketsPerBatch:        10,
 			MaxARQWindowSize:          8000,
 			MaxARQDataNackMaxGap:      128,
-			MinCompressionMinSize:     120,
 			MinARQInitialRTOSeconds:   0.05,
 		},
 		HasClientPolicySync: true,
@@ -126,9 +122,6 @@ func TestApplySessionInitPacketAppliesServerClientPolicy(t *testing.T) {
 	if c.cfg.ARQDataNackMaxGap != 128 {
 		t.Fatalf("unexpected arq data nack clamp: got=%d want=%d", c.cfg.ARQDataNackMaxGap, 128)
 	}
-	if c.cfg.CompressionMinSize != 120 {
-		t.Fatalf("unexpected compression min size clamp: got=%d want=%d", c.cfg.CompressionMinSize, 120)
-	}
 	if c.cfg.ARQInitialRTOSeconds < 0.049 || c.cfg.ARQInitialRTOSeconds > 0.051 {
 		t.Fatalf("unexpected arq initial rto clamp: got=%f", c.cfg.ARQInitialRTOSeconds)
 	}
@@ -170,7 +163,6 @@ func TestApplySessionInitPacketPreservesHigherTunnelProcessWorkers(t *testing.T)
 		MaxPacketsPerBatch:            30,
 		ARQWindowSize:                 12000,
 		ARQDataNackMaxGap:             300,
-		CompressionMinSize:            40,
 		ARQInitialRTOSeconds:          0.02,
 		ARQControlInitialRTOSeconds:   0.02,
 		ARQMaxRTOSeconds:              5.0,
@@ -182,9 +174,8 @@ func TestApplySessionInitPacketPreservesHigherTunnelProcessWorkers(t *testing.T)
 
 	verifyCode := [4]byte{1, 2, 3, 4}
 	acceptPayload := VpnProto.SessionAcceptPayload{
-		SessionID:       9,
-		CompressionPair: compression.PackPair(compression.TypeOff, compression.TypeOff),
-		VerifyCode:      verifyCode,
+		SessionID:  9,
+		VerifyCode: verifyCode,
 		ClientPolicy: VpnProto.SessionAcceptClientPolicy{
 			MaxPacketDuplicationCount: 5,
 			MaxSetupDuplicationCount:  6,
@@ -195,7 +186,6 @@ func TestApplySessionInitPacketPreservesHigherTunnelProcessWorkers(t *testing.T)
 			MaxPacketsPerBatch:        10,
 			MaxARQWindowSize:          8000,
 			MaxARQDataNackMaxGap:      128,
-			MinCompressionMinSize:     120,
 			MinARQInitialRTOSeconds:   0.05,
 		},
 		HasClientPolicySync: true,
@@ -265,8 +255,7 @@ func buildTestSessionAccept(t *testing.T, c *Client, payload VpnProto.SessionAcc
 	t.Helper()
 	if c.sessionHandshake == nil {
 		var parameters [security.InitParametersSize]byte
-		parameters[1] = compression.PackPair(compression.TypeOff, compression.TypeOff)
-		copy(parameters[6:], payload.VerifyCode[:])
+		copy(parameters[5:], payload.VerifyCode[:])
 		handshake, initMessage, err := security.NewClientHandshake(c.credential, parameters, time.Now(), rand.Reader)
 		if err != nil {
 			t.Fatalf("NewClientHandshake failed: %v", err)
@@ -299,9 +288,8 @@ func buildTestSessionAccept(t *testing.T, c *Client, payload VpnProto.SessionAcc
 func answerSessionInitQueries(t *testing.T, c *Client, resolver *net.UDPConn, verifyCode [4]byte, base64Reply bool) *atomic.Int32 {
 	t.Helper()
 	accept := buildTestSessionAccept(t, c, VpnProto.SessionAcceptPayload{
-		SessionID:       7,
-		CompressionPair: compression.PackPair(compression.TypeOff, compression.TypeOff),
-		VerifyCode:      verifyCode,
+		SessionID:  7,
+		VerifyCode: verifyCode,
 		ClientPolicy: VpnProto.SessionAcceptClientPolicy{
 			MaxUploadMTU:   120,
 			MaxDownloadMTU: 4000,
@@ -404,8 +392,7 @@ func TestInitializeSessionRequestRacersDoNotRaceWithAppliedAnswer(t *testing.T) 
 
 // A session init racer that starts after the first answer was applied finds
 // the resolver pools closed by the client policy sync and sizes a new pool
-// from c.cfg, while the sync is still writing c.cfg: an upload MTU under 100
-// turns upload compression off there. Run with -race.
+// from c.cfg, while the sync is still writing c.cfg. Run with -race.
 func TestLateSessionInitRacerDoesNotRaceWithClientPolicySync(t *testing.T) {
 	c, resolver := newSessionInitTestClient(t, sessionInitTestConfig())
 	c.syncedUploadMTU = 90
@@ -450,9 +437,8 @@ func TestLateSessionInitRacerDoesNotRaceWithClientPolicySync(t *testing.T) {
 	}()
 
 	err = c.applySessionInitPacket(buildTestSessionAccept(t, c, VpnProto.SessionAcceptPayload{
-		SessionID:       7,
-		CompressionPair: compression.PackPair(compression.TypeOff, compression.TypeOff),
-		VerifyCode:      verifyCode,
+		SessionID:  7,
+		VerifyCode: verifyCode,
 		ClientPolicy: VpnProto.SessionAcceptClientPolicy{
 			MaxUploadMTU:   120,
 			MaxDownloadMTU: 4000,
@@ -462,9 +448,6 @@ func TestLateSessionInitRacerDoesNotRaceWithClientPolicySync(t *testing.T) {
 	<-racerDone
 	if err != nil {
 		t.Fatalf("applySessionInitPacket returned error: %v", err)
-	}
-	if c.cfg.UploadCompressionType != int(compression.TypeOff) {
-		t.Fatalf("expected upload compression off below 100 bytes, got=%d", c.cfg.UploadCompressionType)
 	}
 }
 
@@ -540,9 +523,8 @@ func TestResolverHealthRecheckDoesNotRaceWithSessionPolicySync(t *testing.T) {
 		t.Fatalf("nextSessionInitAttempt returned error: %v", err)
 	}
 	err = c.applySessionInitPacket(buildTestSessionAccept(t, c, VpnProto.SessionAcceptPayload{
-		SessionID:       7,
-		CompressionPair: compression.PackPair(compression.TypeOff, compression.TypeOff),
-		VerifyCode:      verifyCode,
+		SessionID:  7,
+		VerifyCode: verifyCode,
 		ClientPolicy: VpnProto.SessionAcceptClientPolicy{
 			MaxUploadMTU:   initialUploadMTU - 1,
 			MaxDownloadMTU: 4000,

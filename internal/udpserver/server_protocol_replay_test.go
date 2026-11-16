@@ -11,7 +11,6 @@ import (
 	"golang.org/x/crypto/chacha20poly1305"
 
 	baseCodec "masterdnsvpn-go/internal/basecodec"
-	"masterdnsvpn-go/internal/compression"
 	"masterdnsvpn-go/internal/config"
 	DnsParser "masterdnsvpn-go/internal/dnsparser"
 	Enums "masterdnsvpn-go/internal/enums"
@@ -41,7 +40,6 @@ func tunnelQuery(t *testing.T, wire []byte) []byte {
 func establish(t *testing.T, server *Server, credential security.Credential) (*security.SessionCipher, []byte, []byte) {
 	t.Helper()
 	var parameters [security.InitParametersSize]byte
-	parameters[1] = compression.PackPair(compression.TypeOff, compression.TypeOff)
 	handshake, initMessage, err := security.NewClientHandshake(credential, parameters, time.Now(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -123,7 +121,7 @@ func TestReplayedInitAfterCacheLossDoesNotRekeyTheSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the session no longer works after a replayed INIT: %v", err)
 	}
-	if packet, err := VpnProto.ParseInflated(plain); err != nil || packet.PacketType != Enums.PACKET_PONG {
+	if packet, err := VpnProto.Parse(plain); err != nil || packet.PacketType != Enums.PACKET_PONG {
 		t.Fatalf("expected PONG, got %+v %v", packet, err)
 	}
 }

@@ -38,7 +38,7 @@ const (
 
 // PacketEnqueuer abstracts the transmission layer (Client or Server stream)
 type PacketEnqueuer interface {
-	PushTXPacket(priority int, packetType uint8, sequenceNum uint16, fragmentID uint8, totalFragments uint8, compressionType uint8, ttl time.Duration, payload []byte) bool
+	PushTXPacket(priority int, packetType uint8, sequenceNum uint16, fragmentID uint8, totalFragments uint8, ttl time.Duration, payload []byte) bool
 }
 
 type terminalOwner interface {
@@ -66,16 +66,15 @@ func (d *DummyLogger) Infof(f string, a ...any)  {}
 func (d *DummyLogger) Errorf(f string, a ...any) {}
 
 type arqDataItem struct {
-	Data            []byte
-	CreatedAt       time.Time
-	LastSentAt      time.Time
-	Dispatched      bool
-	LastNackSentAt  time.Time
-	Retries         int
-	CurrentRTO      time.Duration
-	SampleEligible  bool
-	CompressionType uint8
-	TTL             time.Duration
+	Data           []byte
+	CreatedAt      time.Time
+	LastSentAt     time.Time
+	Dispatched     bool
+	LastNackSentAt time.Time
+	Retries        int
+	CurrentRTO     time.Duration
+	SampleEligible bool
+	TTL            time.Duration
 }
 
 type arqControlItem struct {
@@ -103,9 +102,8 @@ type adaptiveRTOState struct {
 }
 
 type rtxJob struct {
-	sn              uint16
-	data            []byte
-	compressionType uint8
+	sn   uint16
+	data []byte
 }
 type rxPayload struct {
 	sn   uint16
@@ -128,8 +126,7 @@ type ARQ struct {
 	localConn            io.ReadWriteCloser
 	logger               Logger
 
-	mtu             int
-	compressionType uint8
+	mtu int
 
 	// Sequence and buffers
 	sndNxt        uint16
@@ -295,7 +292,6 @@ type Config struct {
 	DataNackRepeatSeconds       float64
 	TerminalDrainTimeout        float64
 	TerminalAckWaitTimeout      float64
-	CompressionType             uint8
 	IsClient                    bool
 	InboundQueueSize            int
 }
@@ -376,7 +372,6 @@ func NewARQ(streamID uint16, sessionID uint8, enqueuer PacketEnqueuer, localConn
 		dataNackRepeatInterval:   time.Duration(maxF(0.1, cfg.DataNackRepeatSeconds) * float64(time.Second)),
 
 		isVirtual:         cfg.IsVirtual,
-		compressionType:   cfg.CompressionType,
 		firstDataNackSeen: make(map[uint16]time.Time),
 		lastDataNackSent:  make(map[uint16]time.Time),
 
@@ -997,7 +992,7 @@ func (a *ARQ) runFinalAckWatchdog(now time.Time) {
 	a.enqueuer.PushTXPacket(
 		Enums.DefaultPacketPriority(Enums.PACKET_STREAM_DATA_ACK),
 		Enums.PACKET_STREAM_DATA_ACK,
-		ackSN, 0, 0, 0, 0, nil,
+		ackSN, 0, 0, 0, nil,
 	)
 }
 
@@ -1169,22 +1164,21 @@ func (a *ARQ) ioLoop() {
 			a.sndNxt++
 			currentRTO := a.currentDataBaseRTO()
 			a.sndBuf[sn] = &arqDataItem{
-				Data:            raw,
-				CreatedAt:       now,
-				LastSentAt:      time.Time{},
-				Dispatched:      false,
-				Retries:         0,
-				CurrentRTO:      currentRTO,
-				SampleEligible:  true,
-				CompressionType: a.compressionType,
-				TTL:             0,
+				Data:           raw,
+				CreatedAt:      now,
+				LastSentAt:     time.Time{},
+				Dispatched:     false,
+				Retries:        0,
+				CurrentRTO:     currentRTO,
+				SampleEligible: true,
+				TTL:            0,
 			}
 			a.mu.Unlock()
 
 			ok := a.enqueuer.PushTXPacket(
 				Enums.DefaultPacketPriority(Enums.PACKET_STREAM_DATA),
 				Enums.PACKET_STREAM_DATA,
-				sn, 0, 0, a.compressionType, 0, raw,
+				sn, 0, 0, 0, raw,
 			)
 			if !ok {
 				a.mu.Lock()
@@ -1578,7 +1572,7 @@ func (a *ARQ) processReceivedData(sn uint16, data []byte) {
 		a.enqueuer.PushTXPacket(
 			Enums.DefaultPacketPriority(Enums.PACKET_STREAM_DATA_ACK),
 			Enums.PACKET_STREAM_DATA_ACK,
-			sn, 0, 0, 0, 0, nil,
+			sn, 0, 0, 0, nil,
 		)
 		return
 	}
@@ -1602,7 +1596,7 @@ func (a *ARQ) processReceivedData(sn uint16, data []byte) {
 	a.enqueuer.PushTXPacket(
 		Enums.DefaultPacketPriority(Enums.PACKET_STREAM_DATA_ACK),
 		Enums.PACKET_STREAM_DATA_ACK,
-		sn, 0, 0, 0, 0, nil,
+		sn, 0, 0, 0, nil,
 	)
 
 	if !exists {
@@ -1891,14 +1885,13 @@ func (a *ARQ) HandleDataNack(sn uint16) bool {
 	info.LastNackSentAt = now
 
 	data := append([]byte(nil), info.Data...)
-	compressionType := info.CompressionType
 	ttl := info.TTL
 	a.mu.Unlock()
 
 	ok := a.enqueuer.PushTXPacket(
 		Enums.DefaultPacketPriority(Enums.PACKET_STREAM_RESEND),
 		Enums.PACKET_STREAM_RESEND,
-		sn, 0, 0, compressionType, ttl, data,
+		sn, 0, 0, ttl, data,
 	)
 	if !ok {
 		a.mu.Lock()
@@ -1984,7 +1977,7 @@ func (a *ARQ) maybeSendDataNacks(sn uint16) {
 		if !a.enqueuer.PushTXPacket(
 			Enums.DefaultPacketPriority(Enums.PACKET_STREAM_DATA_NACK),
 			Enums.PACKET_STREAM_DATA_NACK,
-			missing, 0, 0, 0, 0, nil,
+			missing, 0, 0, 0, nil,
 		) {
 			a.noteDrainQueueFailure(now)
 			continue
@@ -2100,7 +2093,7 @@ func (a *ARQ) runGapRecoveryWatchdog(now time.Time) {
 		if !a.enqueuer.PushTXPacket(
 			Enums.DefaultPacketPriority(Enums.PACKET_STREAM_DATA_NACK),
 			Enums.PACKET_STREAM_DATA_NACK,
-			missing, 0, 0, 0, 0, nil,
+			missing, 0, 0, 0, nil,
 		) {
 			continue
 		}
@@ -2117,7 +2110,7 @@ func (a *ARQ) SendControlPacketWithTTL(packetType uint8, sequenceNum uint16, fra
 	priority = Enums.NormalizePacketPriority(packetType, priority)
 
 	if !a.enableControlReliability || !trackForAck {
-		return a.enqueuer.PushTXPacket(priority, packetType, sequenceNum, fragmentID, totalFragments, 0, ttl, copyData)
+		return a.enqueuer.PushTXPacket(priority, packetType, sequenceNum, fragmentID, totalFragments, ttl, copyData)
 	}
 
 	var expectedAck uint8
@@ -2148,7 +2141,7 @@ func (a *ARQ) SendControlPacketWithTTL(packetType uint8, sequenceNum uint16, fra
 		}
 	}
 
-	ok := a.enqueuer.PushTXPacket(priority, packetType, sequenceNum, fragmentID, totalFragments, 0, ttl, copyData)
+	ok := a.enqueuer.PushTXPacket(priority, packetType, sequenceNum, fragmentID, totalFragments, ttl, copyData)
 
 	dispatchedFlag := false
 	lastSentAt := time.Time{}
@@ -2375,9 +2368,8 @@ func (a *ARQ) checkRetransmits() {
 		}
 
 		jobs = append(jobs, rtxJob{
-			sn:              sn,
-			data:            info.Data,
-			compressionType: info.CompressionType,
+			sn:   sn,
+			data: info.Data,
 		})
 	}
 	a.mu.RUnlock()
@@ -2404,7 +2396,7 @@ func (a *ARQ) checkRetransmits() {
 		ok := a.enqueuer.PushTXPacket(
 			priority,
 			packetType,
-			j.sn, 0, 0, j.compressionType, 0, j.data,
+			j.sn, 0, 0, 0, j.data,
 		)
 		if !ok {
 			a.noteDrainQueueFailure(now)
@@ -2656,7 +2648,7 @@ func (a *ARQ) checkControlRetransmits(now time.Time) {
 			continue
 		}
 
-		ok := a.enqueuer.PushTXPacket(info.Priority, info.PacketType, info.SequenceNum, info.FragmentID, info.TotalFragments, 0, info.TTL, info.Payload)
+		ok := a.enqueuer.PushTXPacket(info.Priority, info.PacketType, info.SequenceNum, info.FragmentID, info.TotalFragments, info.TTL, info.Payload)
 		if !ok {
 			continue
 		}

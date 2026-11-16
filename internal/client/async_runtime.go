@@ -628,7 +628,6 @@ func (c *Client) requeuePlannerTaskForRetry(task plannerTask) {
 		task.item.SequenceNum,
 		task.item.FragmentID,
 		task.item.TotalFragments,
-		task.item.CompressionType,
 		task.item.TTL,
 		task.item.Payload,
 	)
@@ -681,7 +680,7 @@ func (c *Client) buildPlannedOutboundFrames(
 	if c.sessionCipher == nil {
 		return nil, security.ErrInvalidMessage
 	}
-	rawFrame, err := VpnProto.BuildRawAuto(task.opts, c.cfg.CompressionMinSize)
+	rawFrame, err := VpnProto.BuildRaw(task.opts)
 	if err != nil {
 		return nil, err
 	}
@@ -894,7 +893,7 @@ func (c *Client) handleInboundPacket(data []byte, addr *net.UDPAddr, localAddr s
 		return
 	}
 	c.lastAuthRxUnixNano.Store(time.Now().UnixNano())
-	vpnPacket, err := VpnProto.ParseInflated(plain)
+	vpnPacket, err := VpnProto.Parse(plain)
 	if err != nil {
 		return
 	}

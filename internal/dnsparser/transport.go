@@ -17,7 +17,6 @@ import (
 	"sync/atomic"
 
 	baseCodec "masterdnsvpn-go/internal/basecodec"
-	"masterdnsvpn-go/internal/compression"
 	Enums "masterdnsvpn-go/internal/enums"
 	VpnProto "masterdnsvpn-go/internal/vpnproto"
 )
@@ -257,16 +256,15 @@ func BuildTXTResponsePacket(questionPacket []byte, answerName string, answerPayl
 // every production answer is a sealed frame passed to BuildVPNResponsePayload.
 // It remains for tests of the TXT chunking.
 func BuildVPNResponsePacket(questionPacket []byte, answerName string, packet VpnProto.Packet, baseEncode bool) ([]byte, error) {
-	rawFrame, err := VpnProto.BuildRawAuto(VpnProto.BuildOptions{
-		SessionID:       packet.SessionID,
-		PacketType:      packet.PacketType,
-		StreamID:        packet.StreamID,
-		SequenceNum:     packet.SequenceNum,
-		FragmentID:      packet.FragmentID,
-		TotalFragments:  packet.TotalFragments,
-		CompressionType: packet.CompressionType,
-		Payload:         packet.Payload,
-	}, compression.DefaultMinSize)
+	rawFrame, err := VpnProto.BuildRaw(VpnProto.BuildOptions{
+		SessionID:      packet.SessionID,
+		PacketType:     packet.PacketType,
+		StreamID:       packet.StreamID,
+		SequenceNum:    packet.SequenceNum,
+		FragmentID:     packet.FragmentID,
+		TotalFragments: packet.TotalFragments,
+		Payload:        packet.Payload,
+	})
 
 	if err != nil {
 		return nil, err
@@ -368,7 +366,7 @@ func ExtractVPNResponse(packet []byte, baseEncoded bool) (VpnProto.Packet, error
 	if err != nil {
 		return VpnProto.Packet{}, err
 	}
-	return VpnProto.ParseInflated(raw)
+	return VpnProto.Parse(raw)
 }
 
 func ExtractVPNResponsePayload(packet []byte, baseEncoded bool) ([]byte, error) {
@@ -666,7 +664,7 @@ func assembleVPNResponse(rawAnswers [][]byte, baseEncoded bool) (VpnProto.Packet
 	if err != nil {
 		return VpnProto.Packet{}, err
 	}
-	return VpnProto.ParseInflated(raw)
+	return VpnProto.Parse(raw)
 }
 
 func assembleVPNResponsePayload(rawAnswers [][]byte, baseEncoded bool) ([]byte, error) {

@@ -30,7 +30,7 @@ var ErrSessionTableFull = errors.New("session table full")
 const (
 	maxServerSessionID       = 255
 	maxServerSessionSlots    = 255
-	sessionInitDataSize      = 10
+	sessionInitDataSize      = security.InitParametersSize
 	sessionInitSignatureSize = 40
 	minSessionMTU            = 10
 	maxSessionMTU            = 4096
@@ -42,8 +42,6 @@ type sessionRecord struct {
 	ID                                  uint8
 	CredentialID                        string
 	ResponseMode                        uint8
-	UploadCompression                   uint8
-	DownloadCompression                 uint8
 	UploadMTU                           uint16
 	DownloadMTU                         uint16
 	DownloadMTUBytes                    int
@@ -115,14 +113,13 @@ func (h *recentlyClosedHeap) Pop() any {
 
 // serverStreamTXPacket represents a queued packet pending transmission or retransmission.
 type serverStreamTXPacket struct {
-	PacketType      uint8
-	SequenceNum     uint16
-	FragmentID      uint8
-	TotalFragments  uint8
-	CompressionType uint8
-	Payload         []byte
-	CreatedAt       time.Time
-	TTL             time.Duration
+	PacketType     uint8
+	SequenceNum    uint16
+	FragmentID     uint8
+	TotalFragments uint8
+	Payload        []byte
+	CreatedAt      time.Time
+	TTL            time.Duration
 }
 
 var txPacketPool = sync.Pool{
@@ -150,14 +147,13 @@ func getEffectivePriority(packetType uint8, basePriority int) int {
 }
 
 type sessionRuntimeView struct {
-	ID                  uint8
-	ResponseMode        uint8
-	ResponseBase64      bool
-	DownloadCompression uint8
-	DownloadMTU         uint16
-	DownloadMTUBytes    int
-	MaxPackedBlocks     int
-	Crypto              *security.SessionCipher
+	ID               uint8
+	ResponseMode     uint8
+	ResponseBase64   bool
+	DownloadMTU      uint16
+	DownloadMTUBytes int
+	MaxPackedBlocks  int
+	Crypto           *security.SessionCipher
 }
 
 type closedSessionRecord struct {
@@ -259,20 +255,16 @@ func newSessionStore(orphanQueueCap int, streamQueueCap int, options ...any) *se
 
 func (s *sessionStore) findOrCreate(
 	payload []byte,
-	uploadCompressionType uint8,
-	downloadCompressionType uint8,
 	maxPacketsPerBatch int,
 	maxClientUploadMTU int,
 	maxClientDownloadMTU int,
 ) (*sessionRecord, bool, error) {
-	return s.findOrCreateWithSignature(payload, payload, uploadCompressionType, downloadCompressionType, maxPacketsPerBatch, maxClientUploadMTU, maxClientDownloadMTU)
+	return s.findOrCreateWithSignature(payload, payload, maxPacketsPerBatch, maxClientUploadMTU, maxClientDownloadMTU)
 }
 
 func (s *sessionStore) findOrCreateWithSignature(
 	payload []byte,
 	signatureData []byte,
-	uploadCompressionType uint8,
-	downloadCompressionType uint8,
 	maxPacketsPerBatch int,
 	maxClientUploadMTU int,
 	maxClientDownloadMTU int,
@@ -330,16 +322,14 @@ func (s *sessionStore) findOrCreateWithSignature(
 	record.ensureStream0(nil) // Caller should update logger if needed
 	record.reuseUntilUnixNano = record.ReuseUntil.UnixNano()
 	record.setLastActivityUnixNano(nowUnixNano)
-	record.UploadCompression = uploadCompressionType
-	record.DownloadCompression = downloadCompressionType
 	record.applyMTUFromSessionInit(
-		binary.BigEndian.Uint16(payload[2:4]),
-		binary.BigEndian.Uint16(payload[4:6]),
+		binary.BigEndian.Uint16(payload[1:3]),
+		binary.BigEndian.Uint16(payload[3:5]),
 		maxPacketsPerBatch,
 		maxClientUploadMTU,
 		maxClientDownloadMTU,
 	)
-	copy(record.VerifyCode[:], payload[6:10])
+	copy(record.VerifyCode[:], payload[5:9])
 
 	s.byID[slot] = record
 	s.activeCount++
@@ -732,14 +722,13 @@ func (r *sessionRecord) setCrypto(cipher *security.SessionCipher, credentialID s
 
 func (r *sessionRecord) runtimeView() sessionRuntimeView {
 	return sessionRuntimeView{
-		ID:                  r.ID,
-		ResponseMode:        r.ResponseMode,
-		ResponseBase64:      r.ResponseMode == mtuProbeModeBase64,
-		DownloadCompression: r.DownloadCompression,
-		DownloadMTU:         r.DownloadMTU,
-		DownloadMTUBytes:    r.DownloadMTUBytes,
-		MaxPackedBlocks:     r.MaxPackedBlocks,
-		Crypto:              r.crypto.Load(),
+		ID:               r.ID,
+		ResponseMode:     r.ResponseMode,
+		ResponseBase64:   r.ResponseMode == mtuProbeModeBase64,
+		DownloadMTU:      r.DownloadMTU,
+		DownloadMTUBytes: r.DownloadMTUBytes,
+		MaxPackedBlocks:  r.MaxPackedBlocks,
+		Crypto:           r.crypto.Load(),
 	}
 }
 

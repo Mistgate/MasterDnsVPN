@@ -10,7 +10,6 @@ import (
 	"time"
 
 	baseCodec "masterdnsvpn-go/internal/basecodec"
-	"masterdnsvpn-go/internal/compression"
 	DnsParser "masterdnsvpn-go/internal/dnsparser"
 	domainMatcher "masterdnsvpn-go/internal/domainmatcher"
 	Enums "masterdnsvpn-go/internal/enums"
@@ -86,7 +85,7 @@ func (s *Server) handleSecureTunnelCandidate(packet []byte, parsed DnsParser.Lit
 			// Replayed, stale or over budget: a small answer without data.
 			return s.buildNoDataResponseLiteLogged(packet, parsed, "mtu-probe-rejected")
 		}
-		vpnPacket, parseErr := VpnProto.ParseInflated(probe.Payload)
+		vpnPacket, parseErr := VpnProto.Parse(probe.Payload)
 		if parseErr != nil {
 			return s.buildNoDataResponseLiteLogged(packet, parsed, "invalid-mtu-probe")
 		}
@@ -99,7 +98,7 @@ func (s *Server) handleSecureTunnelCandidate(packet []byte, parsed DnsParser.Lit
 }
 
 func (s *Server) handleAuthenticatedFrame(packet []byte, parsed DnsParser.LitePacket, decision domainMatcher.Decision, sessionID uint8, plain []byte) []byte {
-	vpnPacket, parseErr := VpnProto.ParseInflated(plain)
+	vpnPacket, parseErr := VpnProto.Parse(plain)
 	if parseErr != nil {
 		return s.buildNoDataResponseLiteLogged(packet, parsed, "invalid-authenticated-frame")
 	}
@@ -163,17 +162,12 @@ func (s *Server) handleSecureSessionInit(questionPacket []byte, requestName stri
 	}
 
 	parameters := init.Parameters[:]
-	requestedUpload, requestedDownload := compression.SplitPair(parameters[1])
-	resolvedUpload := resolveCompressionType(requestedUpload, s.uploadCompressionMask)
-	resolvedDownload := resolveCompressionType(requestedDownload, s.downloadCompressionMask)
 	signature := make([]byte, 0, security.CredentialIDSize+len(init.Ephemeral))
 	signature = append(signature, init.KID[:]...)
 	signature = append(signature, init.Ephemeral[:]...)
 	record, reused, err := s.sessions.findOrCreateWithSignature(
 		parameters,
 		signature,
-		resolvedUpload,
-		resolvedDownload,
 		s.cfg.EffectiveMaxPacketsPerBatch(),
 		s.cfg.ClientMaxUploadMTU,
 		s.cfg.ClientMaxDownloadMTU,
@@ -189,9 +183,8 @@ func (s *Server) handleSecureSessionInit(questionPacket []byte, requestName stri
 	}
 
 	policy := VpnProto.EncodeSessionAcceptV1Policy(VpnProto.SessionAcceptPayload{
-		SessionID:       record.ID,
-		CompressionPair: compression.PackPair(record.UploadCompression, record.DownloadCompression),
-		VerifyCode:      record.VerifyCode,
+		SessionID:  record.ID,
+		VerifyCode: record.VerifyCode,
 		ClientPolicy: VpnProto.SessionAcceptClientPolicy{
 			MaxPacketDuplicationCount: s.cfg.ClientMaxPacketDuplicationCount,
 			MaxSetupDuplicationCount:  s.cfg.ClientMaxSetupDuplicationCount,
@@ -202,7 +195,6 @@ func (s *Server) handleSecureSessionInit(questionPacket []byte, requestName stri
 			MaxPacketsPerBatch:        s.cfg.ClientMaxPacketsPerBatch,
 			MaxARQWindowSize:          s.cfg.ClientMaxARQWindowSize,
 			MaxARQDataNackMaxGap:      s.cfg.ClientMaxARQDataNackMaxGap,
-			MinCompressionMinSize:     s.cfg.ClientMinCompressionMinSize,
 			MinARQInitialRTOSeconds:   s.cfg.ClientMinARQInitialRTOSeconds,
 		},
 		HasClientPolicySync: true,
@@ -306,15 +298,14 @@ func (s *Server) handleAuthenticatedMTUProbe(questionPacket []byte, requestName 
 	default:
 		return nil
 	}
-	raw, err := VpnProto.BuildRawAuto(VpnProto.BuildOptions{
-		PacketType:      response.PacketType,
-		StreamID:        response.StreamID,
-		SequenceNum:     response.SequenceNum,
-		FragmentID:      response.FragmentID,
-		TotalFragments:  response.TotalFragments,
-		CompressionType: response.CompressionType,
-		Payload:         response.Payload,
-	}, compression.DefaultMinSize)
+	raw, err := VpnProto.BuildRaw(VpnProto.BuildOptions{
+		PacketType:     response.PacketType,
+		StreamID:       response.StreamID,
+		SequenceNum:    response.SequenceNum,
+		FragmentID:     response.FragmentID,
+		TotalFragments: response.TotalFragments,
+		Payload:        response.Payload,
+	})
 	if err != nil {
 		return nil
 	}

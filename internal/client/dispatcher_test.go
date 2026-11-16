@@ -25,10 +25,10 @@ func TestAsyncStreamDispatcherDrainsQueuedWorkAfterSingleWake(t *testing.T) {
 	c.active_streams[stream.StreamID] = stream
 	c.bumpStreamSetVersion()
 
-	if !stream.PushTXPacket(0, 0x99, 1, 0, 0, 0, 0, []byte("first")) {
+	if !stream.PushTXPacket(0, 0x99, 1, 0, 0, 0, []byte("first")) {
 		t.Fatal("expected first packet to enqueue")
 	}
-	if !stream.PushTXPacket(0, 0x98, 2, 0, 0, 0, 0, []byte("second")) {
+	if !stream.PushTXPacket(0, 0x98, 2, 0, 0, 0, []byte("second")) {
 		t.Fatal("expected second packet to enqueue")
 	}
 

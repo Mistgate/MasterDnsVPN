@@ -19,7 +19,7 @@ import (
 const vectorTimestamp = uint32(0x65010203)
 
 var (
-	vectorParameters = []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+	vectorParameters = []byte{1, 2, 3, 4, 5, 6, 7, 8, 9}
 	vectorPolicy     = []byte{0x10, 0x20, 0x30}
 )
 
@@ -118,12 +118,12 @@ func newClientHandshakeWithPrivateKey(credential Credential, initMessage []byte,
 // TestReferenceImplementationMatchesPinnedVectors) and are the compatibility
 // contract for every later client and server.
 const (
-	pinnedInit   = "01000102030405060765010203358072d6365880d1aeea329adf9121383851ed21a28e3b75e965d0d2cd1662549e20b10eab6df8e903063738d1f7e25b4d8c1a33000c0b450db2"
-	pinnedAccept = "79a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a5127151ad99776a55c58d26faa472374a907100e"
-	pinnedC2S    = "e65e010a1c0ab292b08eb5da5a0340ef6502d01880040a285e788dc822736626"
-	pinnedS2C    = "d8c2c5531763b050b1146ea95585d530755e7c2604baf072146704cfea8f4383"
-	pinnedFrame0 = "7e00000000b0335d8fdfc5324d1ef3d47cae4e7b7e31c91125be172d17"
-	pinnedFrame5 = "7e00000005a03e581b56d07c3e50d8193002f09a4029a8b4ade0bfc7d5"
+	pinnedInit   = "01000102030405060765010203358072d6365880d1aeea329adf9121383851ed21a28e3b75e965d0d2cd1662549e20b10eab6df8e903938a32264abef73d0a86678ccaf557b8"
+	pinnedAccept = "79a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51aba952de6f22221aa5d46f972f2fab61012ca7afe"
+	pinnedC2S    = "e3e5013200ed9f4fa7257c2cf846781e6d89cc58140464380dffff281e52f197"
+	pinnedS2C    = "29e276c7676ad92b6d8589aefab2242a31793976095e37a52a284742ef05ffec"
+	pinnedFrame0 = "7e00000000abc726be0a7f709104ac99a3664413fc45c484fa99197ade"
+	pinnedFrame5 = "7e00000005e43508d251046e4e98e3f2fb5c39861003c71daa7f00ff0d"
 	pinnedProbe  = "015000010203040506076553f100909192939495969764006137bcfe9c5425f399d7e25252b57881e05237a483f9bef5822bf5"
 )
 
@@ -139,8 +139,8 @@ func TestReferenceImplementationMatchesPinnedVectors(t *testing.T) {
 	if !bytes.Equal(v.init, wantInit) {
 		t.Fatalf("INIT differs from the reference:\n got %x\nwant %x", v.init, wantInit)
 	}
-	if len(v.init) != 71 || SessionInitSize != 71 {
-		t.Fatalf("INIT must be 1+8+4+32+10+16 = 71 bytes, got %d", len(v.init))
+	if len(v.init) != 70 || SessionInitSize != 70 {
+		t.Fatalf("INIT must be 1+8+4+32+9+16 = 70 bytes, got %d", len(v.init))
 	}
 	wantAccept, c2s, s2c := refAccept(credential.Key[:], wantInit, clientPrivate, serverPrivate, 0x7e, vectorPolicy)
 	if !bytes.Equal(v.accept, wantAccept) {

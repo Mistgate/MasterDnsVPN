@@ -27,7 +27,7 @@ const (
 	CredentialIDSize      = 8
 	CredentialKeySize     = 32
 	InitHeaderSize        = 1 + CredentialIDSize + 4 + 32
-	InitParametersSize    = 10
+	InitParametersSize    = 9
 	SessionInitSize       = InitHeaderSize + InitParametersSize + chacha20poly1305.Overhead
 	SessionAcceptHeadSize = 32
 	FramePrefixSize       = 1 + 4

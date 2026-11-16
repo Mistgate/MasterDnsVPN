@@ -36,7 +36,7 @@ func (s *Server) deferredConnectAttemptTimeout() time.Duration {
 	return timeout
 }
 
-func (s *Server) processDeferredDNSQuery(ctx context.Context, sessionID uint8, sequenceNum uint16, downloadCompression uint8, downloadMTUBytes int, assembledQuery []byte) {
+func (s *Server) processDeferredDNSQuery(ctx context.Context, sessionID uint8, sequenceNum uint16, downloadMTUBytes int, assembledQuery []byte) {
 	if ctx != nil && ctx.Err() != nil {
 		return
 	}
@@ -67,13 +67,12 @@ func (s *Server) processDeferredDNSQuery(ctx context.Context, sessionID uint8, s
 			return
 		}
 		_ = s.queueMainSessionPacket(sessionID, VpnProto.Packet{
-			PacketType:      Enums.PACKET_DNS_QUERY_RES,
-			StreamID:        0,
-			SequenceNum:     sequenceNum,
-			FragmentID:      uint8(fragmentID),
-			TotalFragments:  totalFragments,
-			CompressionType: downloadCompression,
-			Payload:         fragmentPayload,
+			PacketType:     Enums.PACKET_DNS_QUERY_RES,
+			StreamID:       0,
+			SequenceNum:    sequenceNum,
+			FragmentID:     uint8(fragmentID),
+			TotalFragments: totalFragments,
+			Payload:        fragmentPayload,
 		})
 	}
 }
@@ -99,7 +98,7 @@ func (s *Server) processDeferredStreamSyn(ctx context.Context, vpnPacket VpnProt
 	}
 
 	if s.cfg.ForwardIP == "" || s.cfg.ForwardPort <= 0 {
-		stream := record.getOrCreateStream(vpnPacket.StreamID, s.streamARQConfig(record.DownloadCompression), nil, s.log)
+		stream := record.getOrCreateStream(vpnPacket.StreamID, s.streamARQConfig(), nil, s.log)
 		if stream == nil || stream.ARQ == nil {
 			record.enqueueOrphanReset(Enums.PACKET_STREAM_RST, vpnPacket.StreamID, 0)
 			return
@@ -120,7 +119,7 @@ func (s *Server) processDeferredStreamSyn(ctx context.Context, vpnPacket VpnProt
 		return
 	}
 
-	stream := record.getOrCreateStream(vpnPacket.StreamID, s.streamARQConfig(record.DownloadCompression), nil, s.log)
+	stream := record.getOrCreateStream(vpnPacket.StreamID, s.streamARQConfig(), nil, s.log)
 	if stream == nil || stream.ARQ == nil {
 		record.enqueueOrphanReset(Enums.PACKET_STREAM_RST, vpnPacket.StreamID, 0)
 		return
@@ -267,7 +266,7 @@ func (s *Server) processDeferredSOCKS5Syn(ctx context.Context, vpnPacket VpnProt
 		return
 	}
 
-	stream := record.getOrCreateStream(vpnPacket.StreamID, s.streamARQConfig(record.DownloadCompression), nil, s.log)
+	stream := record.getOrCreateStream(vpnPacket.StreamID, s.streamARQConfig(), nil, s.log)
 	if stream == nil || stream.ARQ == nil {
 		record.enqueueOrphanReset(Enums.PACKET_STREAM_RST, vpnPacket.StreamID, 0)
 		s.finalizeStreamArtifacts(vpnPacket.SessionID, vpnPacket.StreamID)
