@@ -34,58 +34,55 @@ const (
 	mtuProbeMetaLength  = mtuProbeCodeLength + 2
 	mtuProbeUpMinSize   = 1 + mtuProbeCodeLength
 	mtuProbeDownMinSize = mtuProbeUpMinSize + 2
-	mtuProbeMinDownSize = VpnProto.SessionAcceptPayloadSize
+	mtuProbeMinDownSize = VpnProto.SessionAcceptV1PolicySize
 	mtuProbeMaxDownSize = 4096
 )
 
 var preSessionPacketTypes = buildPreSessionPacketTypes()
 
 type Server struct {
-	cfg                      config.ServerConfig
-	log                      *logger.Logger
-	codec                    *security.Codec
-	domainMatcher            *domainMatcher.Matcher
-	sessions                 *sessionStore
-	deferredDNSSession       *deferredSessionProcessor
-	deferredConnectSession   *deferredSessionProcessor
-	invalidCookieTracker     *invalidCookieTracker
-	dnsCache                 *dnsCache.Store
-	dnsResolveInflight       *dnsResolveInflightManager
-	dnsUpstreamServers       []string
-	dnsUpstreamBufferPool    sync.Pool
-	dnsFragments             *fragmentStore.Store[dnsFragmentKey]
-	socks5Fragments          *fragmentStore.Store[socks5FragmentKey]
-	dnsFragmentTimeout       time.Duration
-	resolveDNSQueryFn        func([]byte) ([]byte, error)
-	dialStreamUpstreamFn     func(string, string, time.Duration) (net.Conn, error)
-	uploadCompressionMask    uint8
-	downloadCompressionMask  uint8
-	dropLogIntervalNanos     int64
-	invalidCookieWindow      time.Duration
-	invalidCookieWindowNanos int64
-	invalidCookieThreshold   int
-	socksConnectTimeout      time.Duration
-	useExternalSOCKS5        bool
-	externalSOCKS5Address    string
-	externalSOCKS5Auth       bool
-	externalSOCKS5User       []byte
-	externalSOCKS5Pass       []byte
-	streamOutboundTTL        time.Duration
-	streamOutboundMaxRetry   int
-	mtuProbePayloadPool      sync.Pool
-	packetPool               sync.Pool
-	deferredInflightMu       sync.Mutex
-	deferredInflight         map[uint64]struct{}
-	deferredInflightIndex    map[uint8]map[uint16]map[uint64]struct{}
-	immediateConnectedLog    throttledLogState
-	invalidSessionDropLog    throttledLogState
-	droppedPackets           atomic.Uint64
-	lastDropLogUnix          atomic.Int64
-	deferredDroppedPackets   atomic.Uint64
-	lastDeferredDropLogUnix  atomic.Int64
-	pongNonce                atomic.Uint32
-	invalidDropMode          atomic.Uint32
-	fallback                 *udpFallbackManager
+	cfg                     config.ServerConfig
+	log                     *logger.Logger
+	credentialIndex         *security.AtomicCredentialIndex
+	protocolMu              sync.Mutex
+	initCache               map[initCacheKey]cachedInit
+	probeLimiter            *security.ProbeLimiter
+	domainMatcher           *domainMatcher.Matcher
+	sessions                *sessionStore
+	deferredDNSSession      *deferredSessionProcessor
+	deferredConnectSession  *deferredSessionProcessor
+	dnsCache                *dnsCache.Store
+	dnsResolveInflight      *dnsResolveInflightManager
+	dnsUpstreamServers      []string
+	dnsUpstreamBufferPool   sync.Pool
+	dnsFragments            *fragmentStore.Store[dnsFragmentKey]
+	socks5Fragments         *fragmentStore.Store[socks5FragmentKey]
+	dnsFragmentTimeout      time.Duration
+	resolveDNSQueryFn       func([]byte) ([]byte, error)
+	dialStreamUpstreamFn    func(string, string, time.Duration) (net.Conn, error)
+	uploadCompressionMask   uint8
+	downloadCompressionMask uint8
+	dropLogIntervalNanos    int64
+	socksConnectTimeout     time.Duration
+	useExternalSOCKS5       bool
+	externalSOCKS5Address   string
+	externalSOCKS5Auth      bool
+	externalSOCKS5User      []byte
+	externalSOCKS5Pass      []byte
+	streamOutboundTTL       time.Duration
+	streamOutboundMaxRetry  int
+	mtuProbePayloadPool     sync.Pool
+	packetPool              sync.Pool
+	deferredInflightMu      sync.Mutex
+	deferredInflight        map[uint64]struct{}
+	deferredInflightIndex   map[uint8]map[uint16]map[uint64]struct{}
+	immediateConnectedLog   throttledLogState
+	droppedPackets          atomic.Uint64
+	lastDropLogUnix         atomic.Int64
+	deferredDroppedPackets  atomic.Uint64
+	lastDeferredDropLogUnix atomic.Int64
+	pongNonce               atomic.Uint32
+	fallback                *udpFallbackManager
 }
 
 type request struct {
@@ -105,11 +102,7 @@ type postSessionValidation struct {
 	ok       bool
 }
 
-func New(cfg config.ServerConfig, log *logger.Logger, codec *security.Codec) *Server {
-	invalidCookieWindow := cfg.InvalidCookieWindow()
-	if invalidCookieWindow <= 0 {
-		invalidCookieWindow = 2 * time.Second
-	}
+func New(cfg config.ServerConfig, log *logger.Logger) *Server {
 	dnsFragmentTimeout := cfg.DNSFragmentAssemblyTimeout()
 	if dnsFragmentTimeout <= 0 {
 		dnsFragmentTimeout = 5 * time.Minute
@@ -133,12 +126,13 @@ func New(cfg config.ServerConfig, log *logger.Logger, codec *security.Codec) *Se
 	s := &Server{
 		cfg:                    cfg,
 		log:                    log,
-		codec:                  codec,
+		credentialIndex:        security.NewAtomicCredentialIndex(nil),
+		initCache:              make(map[initCacheKey]cachedInit),
+		probeLimiter:           security.NewProbeLimiter(),
 		domainMatcher:          domainMatcher.New(cfg.Domain, cfg.MinVPNLabelLength),
 		sessions:               sessions,
 		deferredDNSSession:     newDeferredSessionProcessor(dnsDeferredWorkers, dnsDeferredQueue, log),
 		deferredConnectSession: newDeferredSessionProcessor(connectDeferredWorkers, connectDeferredQueue, log),
-		invalidCookieTracker:   newInvalidCookieTracker(),
 		dnsCache: dnsCache.New(
 			cfg.EffectiveDNSCacheMaxRecords(),
 			time.Duration(cfg.DNSCacheTTLSeconds*float64(time.Second)),
@@ -157,18 +151,15 @@ func New(cfg config.ServerConfig, log *logger.Logger, codec *security.Codec) *Se
 		dialStreamUpstreamFn: func(network string, address string, timeout time.Duration) (net.Conn, error) {
 			return net.DialTimeout(network, address, timeout)
 		},
-		uploadCompressionMask:    buildCompressionMask(cfg.SupportedUploadCompressionTypes),
-		downloadCompressionMask:  buildCompressionMask(cfg.SupportedDownloadCompressionTypes),
-		dropLogIntervalNanos:     dropLogInterval.Nanoseconds(),
-		invalidCookieWindow:      invalidCookieWindow,
-		invalidCookieWindowNanos: invalidCookieWindow.Nanoseconds(),
-		invalidCookieThreshold:   cfg.InvalidCookieErrorThreshold,
-		socksConnectTimeout:      socksConnectTimeout,
-		useExternalSOCKS5:        cfg.UseExternalSOCKS5,
-		externalSOCKS5Address:    net.JoinHostPort(cfg.ForwardIP, strconv.Itoa(cfg.ForwardPort)),
-		externalSOCKS5Auth:       cfg.SOCKS5Auth,
-		externalSOCKS5User:       []byte(cfg.SOCKS5User),
-		externalSOCKS5Pass:       []byte(cfg.SOCKS5Pass),
+		uploadCompressionMask:   buildCompressionMask(cfg.SupportedUploadCompressionTypes),
+		downloadCompressionMask: buildCompressionMask(cfg.SupportedDownloadCompressionTypes),
+		dropLogIntervalNanos:    dropLogInterval.Nanoseconds(),
+		socksConnectTimeout:     socksConnectTimeout,
+		useExternalSOCKS5:       cfg.UseExternalSOCKS5,
+		externalSOCKS5Address:   net.JoinHostPort(cfg.ForwardIP, strconv.Itoa(cfg.ForwardPort)),
+		externalSOCKS5Auth:      cfg.SOCKS5Auth,
+		externalSOCKS5User:      []byte(cfg.SOCKS5User),
+		externalSOCKS5Pass:      []byte(cfg.SOCKS5Pass),
 		mtuProbePayloadPool: sync.Pool{
 			New: func() any {
 				return make([]byte, mtuProbeMaxDownSize)
@@ -184,6 +175,15 @@ func New(cfg config.ServerConfig, log *logger.Logger, codec *security.Codec) *Se
 	}
 	sessions.streamCleanup = s.cleanupStreamArtifacts
 	return s
+}
+
+// SetCredentialIndex atomically replaces the credential set used for new
+// handshakes and pre-session MTU probes.
+func (s *Server) SetCredentialIndex(index security.CredentialIndex) {
+	if s == nil || s.credentialIndex == nil {
+		return
+	}
+	s.credentialIndex.Set(index)
 }
 
 // HandlePacket processes an incoming raw DNS query packet and returns the generated DNS response.

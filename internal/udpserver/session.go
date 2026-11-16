@@ -9,7 +9,6 @@ package udpserver
 
 import (
 	"container/heap"
-	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -22,24 +21,26 @@ import (
 	"masterdnsvpn-go/internal/arq"
 	Enums "masterdnsvpn-go/internal/enums"
 	"masterdnsvpn-go/internal/mlq"
+	"masterdnsvpn-go/internal/security"
 	VpnProto "masterdnsvpn-go/internal/vpnproto"
 )
 
 var ErrSessionTableFull = errors.New("session table full")
 
 const (
-	maxServerSessionID    = 255
-	maxServerSessionSlots = 255
-	sessionInitDataSize   = 10
-	minSessionMTU         = 10
-	maxSessionMTU         = 4096
+	maxServerSessionID       = 255
+	maxServerSessionSlots    = 255
+	sessionInitDataSize      = 10
+	sessionInitSignatureSize = 40
+	minSessionMTU            = 10
+	maxSessionMTU            = 4096
 )
 
 type sessionRecord struct {
 	mu sync.RWMutex
 
 	ID                                  uint8
-	Cookie                              uint8
+	CredentialID                        string
 	ResponseMode                        uint8
 	UploadCompression                   uint8
 	DownloadCompression                 uint8
@@ -47,7 +48,8 @@ type sessionRecord struct {
 	DownloadMTU                         uint16
 	DownloadMTUBytes                    int
 	VerifyCode                          [4]byte
-	Signature                           [sessionInitDataSize]byte
+	Signature                           [sessionInitSignatureSize]byte
+	crypto                              atomic.Pointer[security.SessionCipher]
 	MaxPackedBlocks                     int
 	StreamReadBufferSize                int
 	CreatedAt                           time.Time
@@ -149,17 +151,16 @@ func getEffectivePriority(packetType uint8, basePriority int) int {
 
 type sessionRuntimeView struct {
 	ID                  uint8
-	Cookie              uint8
 	ResponseMode        uint8
 	ResponseBase64      bool
 	DownloadCompression uint8
 	DownloadMTU         uint16
 	DownloadMTUBytes    int
 	MaxPackedBlocks     int
+	Crypto              *security.SessionCipher
 }
 
 type closedSessionRecord struct {
-	Cookie       uint8
 	ResponseMode uint8
 	ExpiresAt    time.Time
 }
@@ -173,7 +174,6 @@ const (
 )
 
 type sessionLookupResult struct {
-	Cookie       uint8
 	ResponseMode uint8
 	State        sessionLookupState
 }
@@ -200,10 +200,8 @@ type sessionStore struct {
 	nextID                 uint16
 	activeCount            uint16
 	nextReuseSweepUnixNano int64
-	cookieBytes            [32]byte
-	cookieIndex            int
 	byID                   [maxServerSessionID + 1]*sessionRecord
-	bySig                  map[[sessionInitDataSize]byte]uint8
+	bySig                  map[[sessionInitSignatureSize]byte]uint8
 	recentClosed           map[uint8]closedSessionRecord
 	orphanQueueCap         int
 	streamQueueCap         int
@@ -246,9 +244,8 @@ func newSessionStore(orphanQueueCap int, streamQueueCap int, options ...any) *se
 		}
 	}
 	return &sessionStore{
-		bySig:             make(map[[sessionInitDataSize]byte]uint8, 64),
+		bySig:             make(map[[sessionInitSignatureSize]byte]uint8, 64),
 		recentClosed:      make(map[uint8]closedSessionRecord, 32),
-		cookieIndex:       32,
 		nextID:            1,
 		orphanQueueCap:    orphanQueueCap,
 		streamQueueCap:    streamQueueCap,
@@ -268,12 +265,26 @@ func (s *sessionStore) findOrCreate(
 	maxClientUploadMTU int,
 	maxClientDownloadMTU int,
 ) (*sessionRecord, bool, error) {
+	return s.findOrCreateWithSignature(payload, payload, uploadCompressionType, downloadCompressionType, maxPacketsPerBatch, maxClientUploadMTU, maxClientDownloadMTU)
+}
+
+func (s *sessionStore) findOrCreateWithSignature(
+	payload []byte,
+	signatureData []byte,
+	uploadCompressionType uint8,
+	downloadCompressionType uint8,
+	maxPacketsPerBatch int,
+	maxClientUploadMTU int,
+	maxClientDownloadMTU int,
+) (*sessionRecord, bool, error) {
 	if len(payload) != sessionInitDataSize || !isValidSessionResponseMode(payload[0]) {
 		return nil, false, nil
 	}
-
-	var signature [sessionInitDataSize]byte
-	copy(signature[:], payload[:sessionInitDataSize])
+	if len(signatureData) == 0 || len(signatureData) > sessionInitSignatureSize {
+		return nil, false, nil
+	}
+	var signature [sessionInitSignatureSize]byte
+	copy(signature[:], signatureData)
 
 	now := time.Now()
 	nowUnixNano := now.UnixNano()
@@ -329,7 +340,6 @@ func (s *sessionStore) findOrCreate(
 		maxClientDownloadMTU,
 	)
 	copy(record.VerifyCode[:], payload[6:10])
-	record.Cookie = s.randomCookieLocked()
 
 	s.byID[slot] = record
 	s.activeCount++
@@ -390,7 +400,6 @@ func (s *sessionStore) Lookup(sessionID uint8) (sessionLookupResult, bool) {
 
 	if record := s.byID[sessionID]; record != nil {
 		return sessionLookupResult{
-			Cookie:       record.Cookie,
 			ResponseMode: record.ResponseMode,
 			State:        sessionLookupActive,
 		}, true
@@ -398,7 +407,6 @@ func (s *sessionStore) Lookup(sessionID uint8) (sessionLookupResult, bool) {
 
 	if record, ok := s.recentClosed[sessionID]; ok {
 		return sessionLookupResult{
-			Cookie:       record.Cookie,
 			ResponseMode: record.ResponseMode,
 			State:        sessionLookupClosed,
 		}, true
@@ -407,17 +415,16 @@ func (s *sessionStore) Lookup(sessionID uint8) (sessionLookupResult, bool) {
 	return sessionLookupResult{}, false
 }
 
-func (s *sessionStore) ValidateAndTouch(sessionID uint8, cookie uint8, now time.Time) sessionValidationResult {
+func (s *sessionStore) ValidateAndTouch(sessionID uint8, now time.Time) sessionValidationResult {
 	s.mu.RLock()
 	if record := s.byID[sessionID]; record != nil {
 		result := sessionValidationResult{
 			Lookup: sessionLookupResult{
-				Cookie:       record.Cookie,
 				ResponseMode: record.ResponseMode,
 				State:        sessionLookupActive,
 			},
 			Known: true,
-			Valid: record.Cookie == cookie,
+			Valid: true,
 		}
 		if result.Valid {
 			view := record.runtimeView()
@@ -434,7 +441,6 @@ func (s *sessionStore) ValidateAndTouch(sessionID uint8, cookie uint8, now time.
 		s.mu.RUnlock()
 		return sessionValidationResult{
 			Lookup: sessionLookupResult{
-				Cookie:       record.Cookie,
 				ResponseMode: record.ResponseMode,
 				State:        sessionLookupClosed,
 			},
@@ -464,7 +470,6 @@ func (s *sessionStore) Close(sessionID uint8, now time.Time, retention time.Dura
 	}
 	if retention > 0 {
 		s.recentClosed[sessionID] = closedSessionRecord{
-			Cookie:       record.Cookie,
 			ResponseMode: record.ResponseMode,
 			ExpiresAt:    now.Add(retention),
 		}
@@ -472,6 +477,13 @@ func (s *sessionStore) Close(sessionID uint8, now time.Time, retention time.Dura
 		delete(s.recentClosed, sessionID)
 	}
 	return record, true
+}
+
+// discardUnestablished drops a record whose ACCEPT could not be built.
+func (s *sessionStore) discardUnestablished(record *sessionRecord) {
+	if record != nil {
+		s.Close(record.ID, time.Now(), 0)
+	}
 }
 
 func (s *sessionStore) Cleanup(now time.Time, idleTimeout time.Duration, closedRetention time.Duration) []closedSessionCleanup {
@@ -511,7 +523,6 @@ func (s *sessionStore) Cleanup(now time.Time, idleTimeout time.Duration, closedR
 		}
 		if closedRetention > 0 {
 			s.recentClosed[uint8(sessionID)] = closedSessionRecord{
-				Cookie:       record.Cookie,
 				ResponseMode: record.ResponseMode,
 				ExpiresAt:    now.Add(closedRetention),
 			}
@@ -581,19 +592,6 @@ func (s *sessionStore) allocateSlotLocked() int {
 		}
 	}
 	return -1
-}
-
-func (s *sessionStore) randomCookieLocked() uint8 {
-	if s.cookieIndex >= len(s.cookieBytes) {
-		if _, err := rand.Read(s.cookieBytes[:]); err != nil {
-			s.cookieIndex = len(s.cookieBytes)
-			return 0
-		}
-		s.cookieIndex = 0
-	}
-	value := s.cookieBytes[s.cookieIndex]
-	s.cookieIndex++
-	return value
 }
 
 func (s *sessionStore) updateNextReuseSweepLocked(reuseUntilUnixNano int64) {
@@ -719,16 +717,29 @@ func clampSessionInitAllowedMTU(value int) uint16 {
 	return uint16(value)
 }
 
+// cipher returns the session's AEAD state, or nil until the ACCEPT is built.
+func (r *sessionRecord) cipher() *security.SessionCipher {
+	return r.crypto.Load()
+}
+
+// setCrypto installs the session keys once, before the ACCEPT leaves the server.
+func (r *sessionRecord) setCrypto(cipher *security.SessionCipher, credentialID string) {
+	r.mu.Lock()
+	r.CredentialID = credentialID
+	r.mu.Unlock()
+	r.crypto.Store(cipher)
+}
+
 func (r *sessionRecord) runtimeView() sessionRuntimeView {
 	return sessionRuntimeView{
 		ID:                  r.ID,
-		Cookie:              r.Cookie,
 		ResponseMode:        r.ResponseMode,
 		ResponseBase64:      r.ResponseMode == mtuProbeModeBase64,
 		DownloadCompression: r.DownloadCompression,
 		DownloadMTU:         r.DownloadMTU,
 		DownloadMTUBytes:    r.DownloadMTUBytes,
 		MaxPackedBlocks:     r.MaxPackedBlocks,
+		Crypto:              r.crypto.Load(),
 	}
 }
 

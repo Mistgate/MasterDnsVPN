@@ -36,11 +36,11 @@ func (s *Server) deferredConnectAttemptTimeout() time.Duration {
 	return timeout
 }
 
-func (s *Server) processDeferredDNSQuery(ctx context.Context, sessionID uint8, sessionCookie uint8, sequenceNum uint16, downloadCompression uint8, downloadMTUBytes int, assembledQuery []byte) {
+func (s *Server) processDeferredDNSQuery(ctx context.Context, sessionID uint8, sequenceNum uint16, downloadCompression uint8, downloadMTUBytes int, assembledQuery []byte) {
 	if ctx != nil && ctx.Err() != nil {
 		return
 	}
-	if !s.shouldExecuteDeferredPacket(VpnProto.Packet{SessionID: sessionID, SessionCookie: sessionCookie, StreamID: 0}) {
+	if !s.shouldExecuteDeferredPacket(VpnProto.Packet{SessionID: sessionID, StreamID: 0}) {
 		return
 	}
 
@@ -63,7 +63,7 @@ func (s *Server) processDeferredDNSQuery(ctx context.Context, sessionID uint8, s
 		if ctx != nil && ctx.Err() != nil {
 			return
 		}
-		if !s.shouldExecuteDeferredPacket(VpnProto.Packet{SessionID: sessionID, SessionCookie: sessionCookie, StreamID: 0}) {
+		if !s.shouldExecuteDeferredPacket(VpnProto.Packet{SessionID: sessionID, StreamID: 0}) {
 			return
 		}
 		_ = s.queueMainSessionPacket(sessionID, VpnProto.Packet{

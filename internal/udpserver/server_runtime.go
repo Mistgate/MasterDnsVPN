@@ -131,7 +131,6 @@ func (s *Server) sessionCleanupLoop(ctx context.Context) {
 	recentlyClosedSweepInterval := 5 * time.Minute
 	sessionTimeout := s.cfg.SessionTimeout()
 	closedRetention := s.cfg.ClosedSessionRetention()
-	invalidCookieWindow := s.invalidCookieWindow
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -149,7 +148,6 @@ func (s *Server) sessionCleanupLoop(ctx context.Context) {
 				s.sessions.SweepRecentlyClosedStreams(now)
 				lastRecentlyClosedSweep = now
 			}
-			s.invalidCookieTracker.Cleanup(now, invalidCookieWindow)
 			s.purgeDNSQueryFragments(now)
 			s.purgeSOCKS5SynFragments(now)
 			for _, idleSession := range idleDeferred {

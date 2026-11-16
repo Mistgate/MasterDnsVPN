@@ -83,20 +83,12 @@ DEFERRED_SESSION_QUEUE_LIMIT = 8192
 # from workers, ARQ window, and batching pressure.
 
 # ------------------------------------------------------------------------------
-# 4) Session Lifecycle & Invalid-Cookie Handling
+# 4) Session Lifecycle
 # What this section does:
 # - Controls how long sessions live.
 # - Controls cleanup cadence.
 # - Controls recently-closed stream tracking.
-# - Controls invalid-cookie detection before ERROR_DROP behavior.
 # ------------------------------------------------------------------------------
-
-# Sliding window used by the invalid-cookie tracker.
-INVALID_COOKIE_WINDOW_SECONDS = 2.0
-
-# How many invalid-cookie hits inside the window are tolerated before the
-# server escalates the response behavior for that session.
-INVALID_COOKIE_ERROR_THRESHOLD = 10
 
 # Session inactivity timeout.
 SESSION_TIMEOUT_SECONDS = 300.0
@@ -188,22 +180,8 @@ FORWARD_PORT = 0
 
 # ------------------------------------------------------------------------------
 # 7) Security
-# What this section does:
-# - Controls payload encryption method and where the server key is loaded from.
-# ------------------------------------------------------------------------------
-
-# Allowed values:
-# 0 = None
-# 1 = XOR
-# 2 = ChaCha20
-# 3 = AES-128-GCM
-# 4 = AES-192-GCM
-# 5 = AES-256-GCM
-# Must match the client.
-DATA_ENCRYPTION_METHOD = 1
-
-# Relative or absolute path to the encryption key file.
-ENCRYPTION_KEY_FILE = "encrypt_key.txt"
+# Device credential in 16-hex-kid.64-hex-PSK format.
+DEVICE_CREDENTIAL = ""
 
 # ------------------------------------------------------------------------------
 # 8) ARQ, Packing, and Setup-Control TTLs

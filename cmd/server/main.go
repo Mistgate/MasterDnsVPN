@@ -42,7 +42,6 @@ func main() {
 	flag.StringVar(logPath, "l", "", "Alias for -log")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	flag.BoolVar(versionFlag, "v", false, "Alias for -version")
-	genKeyFlag := flag.Bool("genkey", false, "Generate encryption key and exit")
 	nowaitFlag := flag.Bool("nowait", false, "Do not wait for input on exit (useful for scripting)")
 	configFlags, err := config.NewServerConfigFlagBinder(flag.CommandLine)
 	if err != nil {
@@ -109,39 +108,21 @@ func main() {
 
 	log.Infof("\U0001F680 <magenta>MasterDnsVPN Server starting ...</magenta>")
 
-	keyInfo, err := security.EnsureServerEncryptionKey(cfg)
+	credential, err := security.ParseCredential(cfg.DeviceCredential)
 	if err != nil {
-		log.Errorf("\u274C <red>Encryption Key Setup Failed</red> <magenta>|</magenta> <cyan>%v</cyan>", err)
+		log.Errorf("\u274C <red>Device Credential Setup Failed</red> <magenta>|</magenta> <cyan>%v</cyan>", err)
 		if !*nowaitFlag {
 			waitForExitInput()
 		}
 		os.Exit(1)
 	}
-	if *genKeyFlag {
-		if keyInfo.Generated {
-			log.Infof(
-				"\U0001F5DD\uFE0F <green>Encryption Key Generated, Path: <cyan>%s</cyan></green>",
-				keyInfo.Path,
-			)
-		} else {
-			log.Infof(
-				"\U0001F5C2 <yellow>Encryption Key Already Exists, Path: <cyan>%s</cyan></yellow>",
-				keyInfo.Path,
-			)
-		}
-		return
-	}
-
-	codec, err := security.NewCodecFromConfig(cfg, keyInfo.Key)
+	index, err := security.NewMemoryCredentialIndex([]security.Credential{credential})
 	if err != nil {
-		log.Errorf("\u274C <red>Encryption Codec Setup Failed</red> <magenta>|</magenta> <cyan>%v</cyan>", err)
-		if !*nowaitFlag {
-			waitForExitInput()
-		}
+		log.Errorf("Device credential index setup failed: %v", err)
 		os.Exit(1)
 	}
-
-	srv := UDPServer.New(cfg, log, codec)
+	srv := UDPServer.New(cfg, log)
+	srv.SetCredentialIndex(index)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -161,11 +142,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	log.Infof(
-		"\U0001F510 <green>Encryption Method: <cyan>%s</cyan> <gray>(id=%d)</gray></green>",
-		keyInfo.MethodName,
-		keyInfo.MethodID,
-	)
+	log.Infof("Device credential: %s (ChaCha20-Poly1305)", credential.ID)
 	if cfg.UseExternalSOCKS5 {
 		authMode := "OFF"
 		if cfg.SOCKS5Auth {
@@ -179,19 +156,6 @@ func main() {
 		)
 	}
 
-	if keyInfo.Generated {
-		log.Warnf(
-			"\U0001F5DD\uFE0F <yellow>Encryption Key Generated, Path: <cyan>%s</cyan></yellow>",
-			keyInfo.Path,
-		)
-	} else {
-		log.Infof(
-			"\U0001F5C2 <green>Encryption Key Loaded, Path: <cyan>%s</cyan></green>",
-			keyInfo.Path,
-		)
-	}
-
-	log.Infof("\U0001F511 <green>Active Encryption Key: <yellow>%s</yellow></green>", keyInfo.Key)
 	log.Debugf("\u25B6\uFE0F <green>Starting UDP Server...</green>")
 
 	if err := srv.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {

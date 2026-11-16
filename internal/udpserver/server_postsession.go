@@ -310,7 +310,6 @@ func (s *Server) handlePackedControlBlocksRequest(vpnPacket VpnProto.Packet, ses
 		sawBlock = true
 		block := VpnProto.Packet{
 			SessionID:      vpnPacket.SessionID,
-			SessionCookie:  vpnPacket.SessionCookie,
 			PacketType:     packetType,
 			StreamID:       streamID,
 			HasStreamID:    true,
@@ -537,7 +536,7 @@ func (s *Server) shouldExecuteDeferredPacket(packet VpnProto.Packet) bool {
 	}
 
 	lookup, known := s.sessions.Lookup(packet.SessionID)
-	if !known || lookup.State != sessionLookupActive || lookup.Cookie != packet.SessionCookie {
+	if !known || lookup.State != sessionLookupActive {
 		return false
 	}
 
@@ -655,7 +654,6 @@ func (s *Server) handleDNSQueryRequest(vpnPacket VpnProto.Packet, sessionRecord 
 		s.processDeferredDNSQuery(
 			ctx,
 			vpnPacket.SessionID,
-			vpnPacket.SessionCookie,
 			vpnPacket.SequenceNum,
 			sessionRecord.DownloadCompression,
 			sessionRecord.DownloadMTUBytes,
