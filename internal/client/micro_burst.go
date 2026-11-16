@@ -18,7 +18,6 @@ import (
 	"sync"
 	"time"
 
-	DnsParser "masterdnsvpn-go/internal/dnsparser"
 	Enums "masterdnsvpn-go/internal/enums"
 )
 
@@ -107,7 +106,7 @@ func (c *Client) sendPipelinedMicroBurst(
 		defer stop()
 	}
 
-	requestLen := max(1+mtuProbeCodeLength+2, uploadMTU)
+	requestLen := max(1+mtuProbeCodeLength+2, uploadMTU-uploadProbeSlack)
 	items := make(map[uint32]*burstProbeItem, packetCount)
 	queries := make([][]byte, 0, packetCount)
 	codes := make([]uint32, 0, packetCount)
@@ -211,7 +210,7 @@ func (c *Client) sendPipelinedMicroBurst(
 		}
 
 		now := time.Now()
-		packet, err := DnsParser.ExtractVPNResponse(readBuf[:n], useBase64Flag)
+		packet, err := c.extractMTUProbeResponse(readBuf[:n], useBase64Flag)
 		if err != nil || packet.PacketType != Enums.PACKET_MTU_DOWN_RES || len(packet.Payload) != effectiveDownloadSize || len(packet.Payload) < mtuProbeCodeLength+2 {
 			continue
 		}

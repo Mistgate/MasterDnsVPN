@@ -10,8 +10,10 @@
 package client
 
 import (
+	baseCodec "masterdnsvpn-go/internal/basecodec"
 	DnsParser "masterdnsvpn-go/internal/dnsparser"
 	Enums "masterdnsvpn-go/internal/enums"
+	"masterdnsvpn-go/internal/security"
 	VpnProto "masterdnsvpn-go/internal/vpnproto"
 )
 
@@ -38,10 +40,14 @@ func (c *Client) buildTunnelTXTQueryRaw(domain string, options VpnProto.BuildOpt
 	if err != nil {
 		return nil, err
 	}
-	encoded, err := c.codec.EncryptAndEncodeBytes(raw)
+	if c.sessionCipher == nil {
+		return nil, security.ErrInvalidMessage
+	}
+	frame, err := c.sessionCipher.Seal(raw)
 	if err != nil {
 		return nil, err
 	}
+	encoded := baseCodec.EncodeToBytes(frame)
 	return buildTunnelTXTQuestionBytes(domain, encoded)
 }
 
@@ -51,10 +57,14 @@ func (c *Client) buildEncodedAutoWithCompressionTrace(options VpnProto.BuildOpti
 		return nil, err
 	}
 
-	if c.codec == nil {
-		return nil, VpnProto.ErrCodecUnavailable
+	if c.sessionCipher == nil {
+		return nil, security.ErrInvalidMessage
 	}
-	return c.codec.EncryptAndEncodeBytes(raw)
+	frame, err := c.sessionCipher.Seal(raw)
+	if err != nil {
+		return nil, err
+	}
+	return baseCodec.EncodeToBytes(frame), nil
 }
 
 // buildTunnelTXTQuery builds an encoded tunnel query with automatic option handling.

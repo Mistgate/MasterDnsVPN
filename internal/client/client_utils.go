@@ -592,7 +592,7 @@ func (c *Client) PrintBanner() {
 	c.ShortPrintBanner()
 	c.log.Infof("🚀 <green>Client Configuration Loaded</green>")
 
-	c.log.Infof("🚀 <cyan>Client Mode, Protocol:</cyan> <yellow>%s</yellow> <cyan>Encryption:</cyan> <yellow>%d</yellow>", c.cfg.ProtocolType, c.cfg.DataEncryptionMethod)
+	c.log.Infof("🚀 <cyan>Client Mode, Protocol:</cyan> <yellow>%s</yellow> <cyan>Encryption:</cyan> <yellow>ChaCha20-Poly1305</yellow>", c.cfg.ProtocolType)
 
 	strategyName := "Round-Robin"
 	switch c.cfg.ResolverBalancingStrategy {

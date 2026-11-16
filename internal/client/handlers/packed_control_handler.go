@@ -32,7 +32,6 @@ func handlePackedControlBlocks(c ClientContext, packet VpnProto.Packet, addr *ne
 		innerPacket := VpnProto.Packet{
 			SessionID:       packet.SessionID,
 			PacketType:      pType,
-			SessionCookie:   packet.SessionCookie,
 			HasStreamID:     true,
 			StreamID:        streamID,
 			HasSequenceNum:  true,

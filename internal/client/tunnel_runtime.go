@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"masterdnsvpn-go/internal/dnsparser"
-	VpnProto "masterdnsvpn-go/internal/vpnproto"
 )
 
 const (
@@ -280,24 +279,24 @@ func (c *Client) exchangeUDPQuery(transport *udpQueryTransport, packet []byte, t
 
 // exchangeDNSOverConnection sends a DNS query and returns the extracted VPN packet,
 // decoding the answer as base64 when base64Reply is set.
-func (c *Client) exchangeDNSOverConnection(conn Connection, query []byte, base64Reply bool, timeout time.Duration) (VpnProto.Packet, error) {
+func (c *Client) exchangeDNSOverConnection(conn Connection, query []byte, base64Reply bool, timeout time.Duration) ([]byte, error) {
 	udpConn, err := c.getUDPConn(context.Background(), conn.ResolverLabel)
 	if err != nil {
-		return VpnProto.Packet{}, err
+		return nil, err
 	}
 
 	response, err := c.exchangeUDPQueryWithConn(udpConn, query, timeout)
 	if err != nil {
 		_ = udpConn.Close()
-		return VpnProto.Packet{}, err
+		return nil, err
 	}
 
 	c.putUDPConn(conn.ResolverLabel, udpConn)
 
-	packet, err := dnsparser.ExtractVPNResponse(response, base64Reply)
+	payload, err := dnsparser.ExtractVPNResponsePayload(response, base64Reply)
 	if err != nil {
-		return VpnProto.Packet{}, err
+		return nil, err
 	}
 
-	return packet, nil
+	return payload, nil
 }

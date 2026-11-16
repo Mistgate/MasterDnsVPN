@@ -58,8 +58,7 @@ type ClientConfig struct {
 	UploadCompressionType                 int               `toml:"UPLOAD_COMPRESSION_TYPE"`
 	DownloadCompressionType               int               `toml:"DOWNLOAD_COMPRESSION_TYPE"`
 	CompressionMinSize                    int               `toml:"COMPRESSION_MIN_SIZE"`
-	DataEncryptionMethod                  int               `toml:"DATA_ENCRYPTION_METHOD"`
-	EncryptionKey                         string            `toml:"ENCRYPTION_KEY"`
+	DeviceCredential                      string            `toml:"DEVICE_CREDENTIAL"`
 	MinUploadMTU                          int               `toml:"MIN_UPLOAD_MTU"`
 	MinDownloadMTU                        int               `toml:"MIN_DOWNLOAD_MTU"`
 	MaxUploadMTU                          int               `toml:"MAX_UPLOAD_MTU"`
@@ -176,8 +175,7 @@ func defaultClientConfig() ClientConfig {
 		UploadCompressionType:                 compression.TypeOff,
 		DownloadCompressionType:               compression.TypeOff,
 		CompressionMinSize:                    compression.DefaultMinSize,
-		DataEncryptionMethod:                  1,
-		EncryptionKey:                         "",
+		DeviceCredential:                      "",
 		MinUploadMTU:                          38,
 		MinDownloadMTU:                        100,
 		MaxUploadMTU:                          150,
@@ -371,10 +369,6 @@ func finalizeClientConfig(cfg ClientConfig) (ClientConfig, error) {
 		return cfg, fmt.Errorf("invalid PROTOCOL_TYPE: %q", cfg.ProtocolType)
 	}
 
-	if cfg.DataEncryptionMethod < 0 || cfg.DataEncryptionMethod > 5 {
-		return cfg, fmt.Errorf("invalid DATA_ENCRYPTION_METHOD: %d", cfg.DataEncryptionMethod)
-	}
-
 	cfg.ListenIP = defaultString(strings.TrimSpace(cfg.ListenIP), "127.0.0.1")
 
 	if cfg.ListenPort < 0 || cfg.ListenPort > 65535 {
@@ -506,10 +500,7 @@ func finalizeClientConfig(cfg ClientConfig) (ClientConfig, error) {
 	cfg.MTUAddedServerLogFormat = strings.TrimSpace(cfg.MTUAddedServerLogFormat)
 	cfg.MTUReactiveAddedServerLogFormat = strings.TrimSpace(cfg.MTUReactiveAddedServerLogFormat)
 
-	cfg.EncryptionKey = strings.TrimSpace(cfg.EncryptionKey)
-	if cfg.DataEncryptionMethod != 0 && cfg.EncryptionKey == "" {
-		return cfg, fmt.Errorf("ENCRYPTION_KEY is required when DATA_ENCRYPTION_METHOD is not 0 (None)")
-	}
+	cfg.DeviceCredential = strings.TrimSpace(cfg.DeviceCredential)
 
 	cfg.Domains = normalizeClientDomains(cfg.Domains)
 	if len(cfg.Domains) == 0 {

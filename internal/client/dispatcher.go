@@ -350,9 +350,8 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 		c.pingManager.NotifyPacket(finalPacketType, false)
 
 		opts := VpnProto.BuildOptions{
-			SessionID:     c.sessionID,
-			SessionCookie: c.sessionCookie,
-			PacketType:    finalPacketType,
+			SessionID:  c.sessionID,
+			PacketType: finalPacketType,
 			CompressionType: func() uint8 {
 				if wasPacked {
 					return c.uploadCompression

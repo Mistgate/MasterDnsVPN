@@ -17,10 +17,13 @@ import (
 	"time"
 
 	"masterdnsvpn-go/internal/arq"
+	baseCodec "masterdnsvpn-go/internal/basecodec"
 	"masterdnsvpn-go/internal/client/handlers"
 	DnsParser "masterdnsvpn-go/internal/dnsparser"
 	Enums "masterdnsvpn-go/internal/enums"
 	fragmentStore "masterdnsvpn-go/internal/fragmentstore"
+	"masterdnsvpn-go/internal/security"
+	VpnProto "masterdnsvpn-go/internal/vpnproto"
 )
 
 const clientRXDropLogInterval = 2 * time.Second
@@ -119,7 +122,7 @@ func (c *Client) resetRuntimeBindings(resetSession bool) {
 	c.clearWriterQueueSpaceSignal()
 	c.clearSessionResetPending()
 	if resetSession {
-		c.resetSessionState(true)
+		c.resetSessionState()
 	}
 }
 
@@ -235,15 +238,12 @@ func (c *Client) onRXDrop(addr *net.UDPAddr) {
 	)
 }
 
-func (c *Client) resetSessionState(resetSessionCookie bool) {
+func (c *Client) resetSessionState() {
 	if c == nil {
 		return
 	}
 	c.sessionReady = false
 	c.sessionID = 0
-	if resetSessionCookie {
-		c.sessionCookie = 0
-	}
 	c.responseMode = 0
 	c.clearSessionInitBusyUntil()
 	c.resetSessionInitState()
@@ -678,18 +678,12 @@ func (c *Client) buildPlannedOutboundFrames(
 	preparedDomainByName map[string]preparedTunnelDomain,
 	frames []encodedOutboundDatagram,
 ) ([]encodedOutboundDatagram, error) {
-	encoded, err := c.buildEncodedAutoWithCompressionTrace(task.opts)
+	if c.sessionCipher == nil {
+		return nil, security.ErrInvalidMessage
+	}
+	rawFrame, err := VpnProto.BuildRawAuto(task.opts, c.cfg.CompressionMinSize)
 	if err != nil {
 		return nil, err
-	}
-
-	var (
-		firstDomain    string
-		firstDNSPacket []byte
-	)
-
-	if packetByDomain != nil {
-		clear(packetByDomain)
 	}
 
 	if preparedDomainByName != nil {
@@ -721,30 +715,14 @@ func (c *Client) buildPlannedOutboundFrames(
 			preparedDomainByName[domain] = prepared
 		}
 
-		var dnsPacket []byte
-		switch {
-		case firstDNSPacket == nil:
-			dnsPacket, err = DnsParser.BuildTunnelTXTQuestionPacketPrepared(prepared.normalized, prepared.qname, encoded, Enums.DNS_RECORD_TYPE_TXT, EDnsSafeUDPSize)
-			if err != nil {
-				continue
-			}
-			firstDomain = domain
-			firstDNSPacket = dnsPacket
-		case domain == firstDomain:
-			dnsPacket = firstDNSPacket
-		default:
-			if packetByDomain == nil {
-				packetByDomain = make(map[string][]byte, max(0, len(conns)-1))
-			}
-			var cached bool
-			dnsPacket, cached = packetByDomain[domain]
-			if !cached {
-				dnsPacket, err = DnsParser.BuildTunnelTXTQuestionPacketPrepared(prepared.normalized, prepared.qname, encoded, Enums.DNS_RECORD_TYPE_TXT, EDnsSafeUDPSize)
-				if err != nil {
-					continue
-				}
-				packetByDomain[domain] = dnsPacket
-			}
+		sealed, err := c.sessionCipher.Seal(rawFrame)
+		if err != nil {
+			return nil, err
+		}
+		encoded := baseCodec.EncodeToBytes(sealed)
+		dnsPacket, err := DnsParser.BuildTunnelTXTQuestionPacketPrepared(prepared.normalized, prepared.qname, encoded, Enums.DNS_RECORD_TYPE_TXT, EDnsSafeUDPSize)
+		if err != nil {
+			continue
 		}
 
 		frames = append(frames, encodedOutboundDatagram{
@@ -880,7 +858,7 @@ func (c *Client) handleInboundPacket(data []byte, addr *net.UDPAddr, localAddr s
 	// c.log.Debugf("Inbound packet from %v (%d bytes)", addr, len(data))
 
 	// 1. Extract VPN Packet from DNS Response
-	vpnPacket, err := DnsParser.ExtractVPNResponse(data, c.responseMode == mtuProbeBase64Reply)
+	frame, err := DnsParser.ExtractVPNResponsePayload(data, c.responseMode == mtuProbeBase64Reply)
 	if err != nil {
 		if errors.Is(err, DnsParser.ErrTXTAnswerMissing) {
 			receivedAt := time.Now()
@@ -907,6 +885,20 @@ func (c *Client) handleInboundPacket(data []byte, addr *net.UDPAddr, localAddr s
 		// c.log.Debugf("\U0001F6A8 <red>Failed to parse VPN packet from DNS response: %v from %v</red>", err, addr)
 		return
 	}
+	if c.sessionCipher == nil {
+		return
+	}
+	plain, _, err := c.sessionCipher.Open(frame)
+	if err != nil {
+		// A repeated authenticated response is deliberately not dispatched twice.
+		return
+	}
+	c.lastAuthRxUnixNano.Store(time.Now().UnixNano())
+	vpnPacket, err := VpnProto.ParseInflated(plain)
+	if err != nil {
+		return
+	}
+	vpnPacket.SessionID = frame[0]
 
 	c.balancer.TrackResolverSuccess(
 		data,

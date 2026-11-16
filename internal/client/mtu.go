@@ -19,9 +19,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	baseCodec "masterdnsvpn-go/internal/basecodec"
 	DnsParser "masterdnsvpn-go/internal/dnsparser"
 	Enums "masterdnsvpn-go/internal/enums"
 	"masterdnsvpn-go/internal/logger"
+	"masterdnsvpn-go/internal/security"
 	VpnProto "masterdnsvpn-go/internal/vpnproto"
 )
 
@@ -33,7 +35,7 @@ const (
 	mtuProbeBase64Reply = 1
 	defaultUploadMaxCap = 512
 	minUploadMTUFloor   = 10
-	minDownloadMTUFloor = VpnProto.SessionAcceptPayloadSize
+	minDownloadMTUFloor = VpnProto.SessionAcceptV1PolicySize
 )
 
 var (
@@ -1145,7 +1147,10 @@ func (c *Client) binarySearchMTU(ctx context.Context, label string, minValue, ma
 }
 
 func (c *Client) sendUploadMTUProbe(ctx context.Context, conn Connection, probeTransport *udpQueryTransport, mtuSize int, timeout time.Duration, options mtuProbeOptions) (bool, time.Duration, error) {
-	if mtuSize < 1+mtuProbeCodeLength {
+	// The probe carries uploadProbeSlack fewer payload bytes than the data
+	// packets it stands for, so that both fill the same number of name bytes.
+	probeLen := mtuSize - uploadProbeSlack
+	if probeLen < 1+mtuProbeCodeLength {
 		return false, 0, nil
 	}
 	if err := ctx.Err(); err != nil {
@@ -1159,7 +1164,7 @@ func (c *Client) sendUploadMTUProbe(ctx context.Context, conn Connection, probeT
 		conn.ResolverLabel,
 	)
 
-	payload, code, useBase64, err := c.buildMTUProbePayload(mtuSize)
+	payload, code, useBase64, err := c.buildMTUProbePayload(probeLen)
 	if err != nil {
 		return false, 0, err
 	}
@@ -1184,7 +1189,7 @@ func (c *Client) sendUploadMTUProbe(ctx context.Context, conn Connection, probeT
 	}
 	rtt := time.Since(startedAt)
 
-	packet, err := DnsParser.ExtractVPNResponse(response, useBase64)
+	packet, err := c.extractMTUProbeResponse(response, useBase64)
 	if err != nil {
 		c.logMTUProbe(
 			options.IsRetry,
@@ -1229,7 +1234,7 @@ func (c *Client) sendUploadMTUProbe(ctx context.Context, conn Connection, probeT
 		)
 		return false, 0, nil
 	}
-	ok := int(binary.BigEndian.Uint16(packet.Payload[mtuProbeCodeLength:mtuProbeCodeLength+2])) == mtuSize
+	ok := int(binary.BigEndian.Uint16(packet.Payload[mtuProbeCodeLength:mtuProbeCodeLength+2])) == probeLen
 	if ok {
 		c.logMTUProbe(
 			options.IsRetry,
@@ -1274,7 +1279,7 @@ func (c *Client) sendDownloadMTUProbe(ctx context.Context, conn Connection, prob
 		return false, 0, nil
 	}
 
-	requestLen := max(1+mtuProbeCodeLength+2, uploadMTU)
+	requestLen := max(1+mtuProbeCodeLength+2, uploadMTU-uploadProbeSlack)
 	payload, code, useBase64, err := c.buildMTUProbePayload(requestLen)
 	if err != nil {
 		return false, 0, err
@@ -1303,7 +1308,7 @@ func (c *Client) sendDownloadMTUProbe(ctx context.Context, conn Connection, prob
 
 	rtt := time.Since(startedAt)
 
-	packet, err := DnsParser.ExtractVPNResponse(response, useBase64)
+	packet, err := c.extractMTUProbeResponse(response, useBase64)
 	if err != nil {
 		c.logMTUProbe(
 			options.IsRetry,
@@ -1388,7 +1393,7 @@ func (c *Client) sendDownloadMTUProbe(ctx context.Context, conn Connection, prob
 }
 
 func (c *Client) buildMTUProbeQuery(domain string, packetType uint8, payload []byte) ([]byte, error) {
-	return c.buildTunnelTXTQueryRaw(domain, VpnProto.BuildOptions{
+	raw, err := VpnProto.BuildRaw(VpnProto.BuildOptions{
 		SessionID:      255,
 		PacketType:     packetType,
 		StreamID:       1,
@@ -1397,6 +1402,26 @@ func (c *Client) buildMTUProbeQuery(domain string, packetType uint8, payload []b
 		TotalFragments: 1,
 		Payload:        payload,
 	})
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := security.SealProbe(c.credential, raw, time.Now(), nil)
+	if err != nil {
+		return nil, err
+	}
+	return DnsParser.BuildTunnelTXTQuestionPacket(domain, baseCodec.EncodeToBytes(envelope), Enums.DNS_RECORD_TYPE_TXT, EDnsSafeUDPSize)
+}
+
+func (c *Client) extractMTUProbeResponse(response []byte, base64Reply bool) (VpnProto.Packet, error) {
+	envelope, err := DnsParser.ExtractVPNResponsePayload(response, base64Reply)
+	if err != nil {
+		return VpnProto.Packet{}, err
+	}
+	probe, err := security.OpenProbeWithCredential(envelope, c.credential)
+	if err != nil {
+		return VpnProto.Packet{}, err
+	}
+	return VpnProto.ParseInflated(probe.Payload)
 }
 
 func (c *Client) maxUploadMTUPayload(domain string) int {
@@ -1428,24 +1453,32 @@ func (c *Client) canBuildUploadPayload(domain string, payloadLen int) bool {
 	buf := c.udpBufferPool.Get().([]byte)
 	defer c.udpBufferPool.Put(buf)
 
-	if payloadLen > len(buf) {
+	probeLen := payloadLen - uploadProbeSlack
+	if probeLen <= 0 {
+		return true
+	}
+	if probeLen > len(buf) {
 		return false
 	}
 
-	payload := buf[:payloadLen]
-	encoded, err := VpnProto.BuildEncoded(VpnProto.BuildOptions{
+	payload := buf[:probeLen]
+	raw, err := VpnProto.BuildRaw(VpnProto.BuildOptions{
 		SessionID:      255,
 		PacketType:     Enums.PACKET_MTU_UP_REQ,
-		SessionCookie:  255,
 		StreamID:       0xFFFF,
 		SequenceNum:    0xFFFF,
 		FragmentID:     0xFF,
 		TotalFragments: 0xFF,
 		Payload:        payload,
-	}, c.codec)
+	})
 	if err != nil {
 		return false
 	}
+	envelope, err := security.SealProbe(c.credential, raw, time.Now(), nil)
+	if err != nil {
+		return false
+	}
+	encoded := baseCodec.Encode(envelope)
 
 	_, err = DnsParser.BuildTunnelQuestionName(domain, encoded)
 	return err == nil
@@ -1523,27 +1556,31 @@ func (c *Client) encodedCharsForPacketPayload(packetType uint8, payloadLen int) 
 	}
 
 	payload := buf[:payloadLen]
-	encoded, err := VpnProto.BuildEncoded(VpnProto.BuildOptions{
+	raw, err := VpnProto.BuildRaw(VpnProto.BuildOptions{
 		SessionID:       255,
 		PacketType:      packetType,
-		SessionCookie:   255,
 		StreamID:        0xFFFF,
 		SequenceNum:     0xFFFF,
 		FragmentID:      0xFF,
 		TotalFragments:  0xFF,
 		CompressionType: 0xFF,
 		Payload:         payload,
-	}, c.codec)
+	})
 
 	if err != nil {
 		return 0
 	}
+	envelope, err := security.SealProbe(c.credential, raw, time.Now(), nil)
+	if err != nil {
+		return 0
+	}
+	encoded := baseCodec.Encode(envelope)
 
 	return len(encoded)
 }
 
 func (c *Client) encodedCharsForPayload(payloadLen int) int {
-	return c.encodedCharsForPacketPayload(maxUploadProbePacketType, payloadLen)
+	return c.encodedCharsForPacketPayload(maxUploadProbePacketType, payloadLen-uploadProbeSlack)
 }
 
 func effectiveDownloadMTUProbeSize(downloadMTU int) int {
@@ -1571,16 +1608,17 @@ func computeSafeUploadMTU(uploadMTU int, cryptoOverhead int) int {
 	return safe
 }
 
-func mtuCryptoOverhead(method int) int {
-	switch method {
-	case 2:
-		return 16
-	case 3, 4, 5:
-		return 28
-	default:
-		return 0
-	}
+func mtuCryptoOverhead() int {
+	return security.ProbeHeaderSize + security.TagSize
 }
+
+// uploadProbeSlack is the number of bytes by which a pre-session MTU_UP probe
+// (ver, kind, kid, nonce, tag, MTU_UP_REQ header) is longer than a session frame
+// (sid, ctr, tag, widest data header) with the same payload. Probing with
+// payload-slack bytes makes a probe fill exactly the name a data packet of
+// "payload" bytes fills, so the discovered MTU is the real data payload size.
+var uploadProbeSlack = security.ProbeHeaderSize + security.TagSize + VpnProto.HeaderRawSize(Enums.PACKET_MTU_UP_REQ) -
+	(security.FramePrefixSize + security.TagSize + VpnProto.HeaderRawSize(maxUploadProbePacketType))
 
 func max(a, b int) int {
 	if a > b {

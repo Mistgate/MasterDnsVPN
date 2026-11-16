@@ -35,7 +35,6 @@ const (
 type Client struct {
 	cfg       config.ClientConfig
 	log       *logger.Logger
-	codec     *security.Codec
 	balancer  *Balancer
 	pool      *ResolverPool
 	bgLimiter *BackgroundQueryLimiter
@@ -74,14 +73,22 @@ type Client struct {
 	streamResolverFailoverCooldown        time.Duration
 
 	// Session States
-	sessionID             uint8
-	sessionCookie         uint8
-	responseMode          uint8
-	sessionReady          bool
-	initStateMu           sync.Mutex
-	sessionInitReady      bool
-	sessionInitBase64     bool
-	sessionInitPayload    []byte
+	sessionID          uint8
+	credential         security.Credential
+	sessionHandshake   *security.ClientHandshake
+	sessionCipher      *security.SessionCipher
+	responseMode       uint8
+	sessionReady       bool
+	initStateMu        sync.Mutex
+	sessionInitReady   bool
+	sessionInitBase64  bool
+	sessionInitPayload []byte
+	sessionInitMessage []byte
+	sessionInitBuiltAt time.Time
+	// lastAuthRxUnixNano is the time of the last frame that authenticated. The
+	// server cannot tell a client its session is gone (it has no key to sign
+	// with), so a silent downlink is how the client notices.
+	lastAuthRxUnixNano    atomic.Int64
 	sessionInitVerify     [4]byte
 	sessionInitCursor     int
 	sessionInitBusyUnix   atomic.Int64
@@ -229,12 +236,12 @@ func BootstrapLoadedConfig(cfg config.ClientConfig, logPath string) (*Client, er
 		log = logger.New("MasterDnsVPN Client", cfg.LogLevel)
 	}
 
-	codec, err := security.NewCodec(cfg.DataEncryptionMethod, cfg.EncryptionKey)
+	credential, err := security.ParseCredential(cfg.DeviceCredential)
 	if err != nil {
-		return nil, fmt.Errorf("client codec setup failed: %w", err)
+		return nil, fmt.Errorf("client device credential is invalid: %w", err)
 	}
 
-	c := New(cfg, log, codec)
+	c := New(cfg, log, credential)
 	if err := c.BuildConnectionMap(); err != nil {
 		if c.log != nil {
 			c.log.Errorf("<red>%v</red>", err)
@@ -244,7 +251,7 @@ func BootstrapLoadedConfig(cfg config.ClientConfig, logPath string) (*Client, er
 	return c, nil
 }
 
-func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Client {
+func New(cfg config.ClientConfig, log *logger.Logger, credential security.Credential) *Client {
 	var responseMode uint8
 	if cfg.BaseEncodeData {
 		responseMode = mtuProbeBase64Reply
@@ -256,13 +263,13 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 	c := &Client{
 		cfg:                 cfg,
 		log:                 log,
-		codec:               codec,
+		credential:          credential,
 		balancer:            balancer,
 		pool:                pool,
 		bgLimiter:           NewBackgroundQueryLimiter(15.0, 15),
 		uploadCompression:   uint8(cfg.UploadCompressionType),
 		downloadCompression: uint8(cfg.DownloadCompressionType),
-		mtuCryptoOverhead:   mtuCryptoOverhead(cfg.DataEncryptionMethod),
+		mtuCryptoOverhead:   mtuCryptoOverhead(),
 		maxPackedBlocks:     1,
 		responseMode:        responseMode,
 		udpBufferPool: sync.Pool{
@@ -452,6 +459,9 @@ func (c *Client) Run(ctx context.Context) error {
 					sessionInitRetryDelay = c.nextSessionInitRetryDelay(sessionInitRetryFailures)
 					c.log.Errorf("<red>❌ Session initialization failed: %v</red>", err)
 					c.log.Warnf("<yellow>Session init retry backoff: %s</yellow>", sessionInitRetryDelay)
+					if sessionInitRetryFailures >= 3 {
+						c.log.Warnf("<yellow>The server answers nothing to an unknown credential or to a clock that differs by more than two minutes; check both.</yellow>")
+					}
 					select {
 					case <-ctx.Done():
 						c.notifySessionCloseBurst(time.Second)
@@ -492,7 +502,7 @@ func (c *Client) Run(ctx context.Context) error {
 				return nil
 			case <-c.sessionResetSignal:
 				c.StopAsyncRuntime()
-				c.resetSessionState(true)
+				c.resetSessionState()
 				c.clearRuntimeResetRequest()
 				sessionInitRetryFailures++
 				sessionInitRetryDelay = c.nextSessionInitRetryDelay(sessionInitRetryFailures)
@@ -506,8 +516,31 @@ func (c *Client) Run(ctx context.Context) error {
 				}
 				continue
 			case <-time.After(1 * time.Second):
+				c.checkSessionHealth()
 			}
 		}
+	}
+}
+
+// sessionLivenessTimeout is how long an established session may receive no
+// authenticated frame, not even a PONG, before the client starts a new one.
+// Pings run at least every PING_COLD_INTERVAL_SECONDS (15 s by default).
+const sessionLivenessTimeout = 90 * time.Second
+
+// checkSessionHealth restarts the session when the downlink has gone silent
+// (server restarted, credential revoked, session expired) or when a frame
+// counter is about to run out.
+func (c *Client) checkSessionHealth() {
+	if c == nil || !c.sessionReady {
+		return
+	}
+	if cipher := c.sessionCipher; cipher != nil && cipher.NeedsRekey() {
+		c.requestSessionRestart("frame counter limit reached")
+		return
+	}
+	last := c.lastAuthRxUnixNano.Load()
+	if last != 0 && time.Since(time.Unix(0, last)) > sessionLivenessTimeout {
+		c.requestSessionRestart("no authenticated downlink frame")
 	}
 }
 

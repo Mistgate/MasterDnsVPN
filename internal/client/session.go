@@ -18,10 +18,12 @@ import (
 	"sync"
 	"time"
 
+	baseCodec "masterdnsvpn-go/internal/basecodec"
 	"masterdnsvpn-go/internal/compression"
 	Enums "masterdnsvpn-go/internal/enums"
 	fragmentStore "masterdnsvpn-go/internal/fragmentstore"
 	"masterdnsvpn-go/internal/mlq"
+	"masterdnsvpn-go/internal/security"
 	VpnProto "masterdnsvpn-go/internal/vpnproto"
 )
 
@@ -31,9 +33,11 @@ var (
 )
 
 const (
-	sessionInitPayloadSize      = 10
-	sessionAcceptPayloadSize    = VpnProto.SessionAcceptPayloadSize
-	sessionBusyPayloadSize      = 4
+	sessionInitPayloadSize = 10
+	sessionBusyPayloadSize = 4
+	// sessionInitMaxAge is how long one INIT may be retried before a fresh one
+	// is built; the server accepts a timestamp within 120 s.
+	sessionInitMaxAge           = 60 * time.Second
 	sessionCloseBurstMaxTargets = 10
 	sessionCloseBurstRounds     = 3
 )
@@ -86,7 +90,7 @@ func (c *Client) initializeSessionRequest() error {
 
 	type result struct {
 		err    error
-		packet VpnProto.Packet
+		accept []byte
 	}
 
 	resChan := make(chan result, racingCount)
@@ -101,9 +105,9 @@ func (c *Client) initializeSessionRequest() error {
 		}
 
 		go func() {
-			packet, err := c.exchangeDNSOverConnection(conn, query, base64Reply, c.mtuTestTimeout*3)
+			accept, err := c.exchangeDNSOverConnection(conn, query, base64Reply, c.mtuTestTimeout*3)
 			select {
-			case resChan <- result{err: err, packet: packet}:
+			case resChan <- result{err: err, accept: accept}:
 			case <-ctx.Done():
 			}
 		}()
@@ -117,7 +121,7 @@ waitPhase:
 		case res := <-resChan:
 			responsesReceived++
 			if res.err == nil {
-				if err := c.applySessionInitPacket(res.packet, initPayload, verifyCode); err == nil {
+				if err := c.applySessionInitPacket(res.accept, verifyCode); err == nil {
 					cancel()
 					return nil
 				} else if errors.Is(err, ErrSessionInitBusy) {
@@ -141,47 +145,44 @@ waitPhase:
 	}
 }
 
-func (c *Client) applySessionInitPacket(packet VpnProto.Packet, initPayload []byte, verifyCode [4]byte) error {
+func (c *Client) applySessionInitPacket(message []byte, verifyCode [4]byte) error {
 	if c.SessionReady() {
 		return nil
 	}
-
-	switch packet.PacketType {
-	case Enums.PACKET_SESSION_BUSY:
-		if len(packet.Payload) < sessionBusyPayloadSize || !bytes.Equal(packet.Payload[:sessionBusyPayloadSize], verifyCode[:]) {
-			return ErrSessionInitFailed
-		}
-		c.setSessionInitBusyUntil(time.Now().Add(c.cfg.SessionInitBusyRetryInterval()))
-		return ErrSessionInitBusy
-	case Enums.PACKET_SESSION_ACCEPT:
-		sessionAccept, err := VpnProto.DecodeSessionAcceptPayload(packet.Payload)
-		if err != nil || !bytes.Equal(sessionAccept.VerifyCode[:], verifyCode[:]) {
-			return ErrSessionInitFailed
-		}
-
-		c.initStateMu.Lock()
-		defer c.initStateMu.Unlock()
-
-		if c.sessionReady {
-			return nil
-		}
-
-		c.sessionID = sessionAccept.SessionID
-		c.sessionCookie = sessionAccept.SessionCookie
-		c.responseMode = initPayload[0]
-		c.uploadCompression, c.downloadCompression = compression.SplitPair(sessionAccept.CompressionPair)
-		if sessionAccept.HasClientPolicySync {
-			c.applySessionClientPolicy(sessionAccept.ClientPolicy)
-		}
-		c.sessionReady = true
-		c.applySessionCompressionPolicy()
-		c.clearSessionInitBusyUntil()
-		c.resetSessionInitStateLocked()
-		c.clearSessionResetPending()
+	c.initStateMu.Lock()
+	defer c.initStateMu.Unlock()
+	if c.sessionReady {
 		return nil
-	default:
+	}
+	if c.sessionHandshake == nil {
 		return ErrSessionInitFailed
 	}
+	accepted, keys, err := c.sessionHandshake.OpenAccept(message)
+	if err != nil {
+		return ErrSessionInitFailed
+	}
+	sessionAccept, err := VpnProto.DecodeSessionAcceptV1Policy(accepted.SessionID, accepted.Policy)
+	if err != nil || !bytes.Equal(sessionAccept.VerifyCode[:], verifyCode[:]) {
+		return ErrSessionInitFailed
+	}
+	cipher, err := security.NewSessionCipher(accepted.SessionID, keys.ClientToServer, keys.ServerToClient)
+	if err != nil {
+		return ErrSessionInitFailed
+	}
+	c.sessionID = accepted.SessionID
+	c.sessionCipher = cipher
+	c.responseMode = c.sessionInitPayload[0]
+	c.uploadCompression, c.downloadCompression = compression.SplitPair(sessionAccept.CompressionPair)
+	if sessionAccept.HasClientPolicySync {
+		c.applySessionClientPolicy(sessionAccept.ClientPolicy)
+	}
+	c.sessionReady = true
+	c.lastAuthRxUnixNano.Store(time.Now().UnixNano())
+	c.applySessionCompressionPolicy()
+	c.clearSessionInitBusyUntil()
+	c.resetSessionInitStateLocked()
+	c.clearSessionResetPending()
+	return nil
 }
 
 func (c *Client) applySessionClientPolicy(policy VpnProto.SessionAcceptClientPolicy) {
@@ -374,6 +375,14 @@ func (c *Client) buildSessionInitPayload() ([]byte, bool, [4]byte, error) {
 	binary.BigEndian.PutUint16(payload[2:4], uint16(c.syncedUploadMTU))
 	binary.BigEndian.PutUint16(payload[4:6], uint16(c.syncedDownloadMTU))
 	copy(payload[6:10], verifyCode[:])
+	var parameters [security.InitParametersSize]byte
+	copy(parameters[:], payload)
+	handshake, message, err := security.NewClientHandshake(c.credential, parameters, time.Now(), nil)
+	if err != nil {
+		return nil, false, verifyCode, err
+	}
+	c.sessionHandshake = handshake
+	c.sessionInitMessage = message
 	return payload, payload[0] == mtuProbeBase64Reply, verifyCode, nil
 }
 
@@ -386,7 +395,12 @@ func (c *Client) nextSessionInitAttempt() (Connection, []byte, [4]byte, error) {
 	c.initStateMu.Lock()
 	defer c.initStateMu.Unlock()
 
-	// Persistence Check: reuse existing token/payload if already ready
+	// Persistence Check: reuse the INIT (same ephemeral key and bytes, so a retry
+	// stays idempotent on the server) while its timestamp is still well inside
+	// the server's acceptance window; after that build a new one.
+	if c.sessionInitReady && time.Since(c.sessionInitBuiltAt) > sessionInitMaxAge {
+		c.resetSessionInitStateLocked()
+	}
 	if !c.sessionInitReady {
 		payload, responseBase64, verifyCode, err := c.buildSessionInitPayload()
 		if err != nil {
@@ -396,6 +410,7 @@ func (c *Client) nextSessionInitAttempt() (Connection, []byte, [4]byte, error) {
 		c.sessionInitBase64 = responseBase64
 		c.sessionInitVerify = verifyCode
 		c.sessionInitReady = true
+		c.sessionInitBuiltAt = time.Now()
 		c.sessionInitCursor = 0
 	}
 
@@ -432,6 +447,8 @@ func (c *Client) resetSessionInitState() {
 
 func (c *Client) resetSessionInitStateLocked() {
 	c.sessionInitPayload = nil
+	c.sessionInitMessage = nil
+	c.sessionHandshake = nil
 	c.sessionInitVerify = [4]byte{}
 	c.sessionInitBase64 = false
 	c.sessionInitReady = false
@@ -464,6 +481,12 @@ func (c *Client) sessionInitBusyUntil() time.Time {
 }
 
 func (c *Client) buildSessionQuery(domain string, packetType uint8, payload []byte) ([]byte, error) {
+	if packetType == Enums.PACKET_SESSION_INIT {
+		if len(c.sessionInitMessage) != security.SessionInitSize {
+			return nil, ErrSessionInitFailed
+		}
+		return buildTunnelTXTQuestionBytes(domain, baseCodec.EncodeToBytes(c.sessionInitMessage))
+	}
 	return c.buildTunnelQuery(domain, 0, packetType, payload)
 }
 
@@ -565,9 +588,8 @@ func (c *Client) sendSessionCloseRound(targets []Connection, deadline time.Time)
 		go func() {
 			defer wg.Done()
 			query, err := c.buildTunnelTXTQueryRaw(conn.Domain, VpnProto.BuildOptions{
-				SessionID:     c.sessionID,
-				SessionCookie: c.sessionCookie,
-				PacketType:    Enums.PACKET_SESSION_CLOSE,
+				SessionID:  c.sessionID,
+				PacketType: Enums.PACKET_SESSION_CLOSE,
 			})
 			if err != nil {
 				return

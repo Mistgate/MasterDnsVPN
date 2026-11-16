@@ -80,21 +80,21 @@ func printClientUsage(fs *flag.FlagSet) {
 	fmt.Fprintf(fs.Output(), "  %s -config client_config.toml\n", bin)
 	fmt.Fprintf(fs.Output(), "  %s -config ./client_config.toml -resolvers ./client_resolvers.txt\n", bin)
 	fmt.Fprintf(fs.Output(), "  %s -log ./client.log -version\n", bin)
-	fmt.Fprintf(fs.Output(), "  %s -config ./client_config.toml -d domain1.com,domain2.com -k my-secret-key\n\n", bin)
+	fmt.Fprintf(fs.Output(), "  %s -config ./client_config.toml -d domain1,domain2 -k <kid-hex>.<key-hex>\n\n", bin)
 	fmt.Fprintf(fs.Output(), "Flags:\n")
 	fs.PrintDefaults()
 }
 
 type clientCLIOptions struct {
-	configPath    string
-	jsonPath      string
-	jsonBase64    string
-	logPath       string
-	resolversPath string
-	showVersion   bool
-	showHelp      bool
-	domainsShort  string
-	keyShort      string
+	configPath      string
+	jsonPath        string
+	jsonBase64      string
+	logPath         string
+	resolversPath   string
+	showVersion     bool
+	showHelp        bool
+	domainsShort    string
+	credentialShort string
 }
 
 func newClientFlagSet(output io.Writer) (*flag.FlagSet, *clientCLIOptions, *config.ClientConfigFlagBinder, error) {
@@ -126,8 +126,8 @@ func newClientFlagSet(output io.Writer) (*flag.FlagSet, *clientCLIOptions, *conf
 	fs.BoolVar(&opts.showHelp, "h", false, "Alias for -help")
 
 	fs.StringVar(&opts.domainsShort, "d", "", "Alias for -domains (comma separated)")
-	fs.StringVar(&opts.keyShort, "k", "", "Alias for -encryption-key")
-	fs.StringVar(&opts.keyShort, "key", "", "Compatibility alias for -encryption-key")
+	fs.StringVar(&opts.credentialShort, "k", "", "Alias for -device-credential")
+	fs.StringVar(&opts.credentialShort, "credential", "", "Device credential as 16-hex-kid.64-hex-key")
 
 	configFlags, err := config.NewClientConfigFlagBinder(fs)
 	if err != nil {
@@ -161,8 +161,8 @@ func parseClientCLIArgs(args []string, output io.Writer) (*clientCLIOptions, con
 	if opts.domainsShort != "" {
 		overrides.Values["Domains"] = strings.Split(opts.domainsShort, ",")
 	}
-	if opts.keyShort != "" {
-		overrides.Values["EncryptionKey"] = opts.keyShort
+	if opts.credentialShort != "" {
+		overrides.Values["DeviceCredential"] = opts.credentialShort
 	}
 
 	positionalArgs := normalizeClientPositionalArgs(fs.Args())

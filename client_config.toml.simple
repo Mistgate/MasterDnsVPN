@@ -9,7 +9,7 @@
 # 1) Tunnel Identity & Security
 # What this section does:
 # - Defines which tunnel domains this client will use.
-# - Defines payload encryption and the shared key that must match the server.
+# - Defines the per-device credential used for authenticated tunnel sessions.
 # ------------------------------------------------------------------------------
 
 # Tunnel domains used to build DNS queries.
@@ -18,21 +18,8 @@
 # All domains must be handled by the same server. Do not use different domains across multiple servers.
 DOMAINS = ["v.domain.com"]
 
-# Encryption method for tunnel payloads.
-# Allowed values:
-# 0 = None
-# 1 = XOR
-# 2 = ChaCha20
-# 3 = AES-128-GCM
-# 4 = AES-192-GCM
-# 5 = AES-256-GCM
-# Must match server DATA_ENCRYPTION_METHOD.
-DATA_ENCRYPTION_METHOD = 1
-
-# Shared encryption key.
-# Required unless DATA_ENCRYPTION_METHOD is 0.
-# Must match the server-side key file contents.
-ENCRYPTION_KEY = ""
+# Device credential in 16-hex-kid.64-hex-PSK format.
+DEVICE_CREDENTIAL = ""
 
 # ------------------------------------------------------------------------------
 # 2) Local Proxy Listener
