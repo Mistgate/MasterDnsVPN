@@ -144,7 +144,7 @@ Client (`mgdns.NewClient(ClientConfig)`): no TOML, no file, no listener (no SOCK
 - 3 min 30 s is the time to live of a SOCKS5_SYN (120 s) plus the wait for the answer to its reset (90 s): a SYN that was never answered from the start.
 - **H3 (head of the queue in the deferred connects) is confirmed.** A connect holds its worker until it ends and every worker has a FIFO. With 4 workers, 10 black-hole targets and a connect timeout of 2 s an ordinary connect waited 4.3 s (two timeouts); at the old defaults (4 workers, connect timeout capped at 15 s) it would wait about 30 s, and more for more black holes. Fixed by 64 workers (the least loaded takes a new lane), a 20 s timeout and a per-session limit of pending connects: an ordinary connect behind 10 black holes is answered in about 10 ms (`TestBlackHoleConnectsDoNotDelayOtherConnects`).
 - A soak test (`TestFacadeSoak`, 5 minutes by default, `MGDNS_SOAK_MINUTES=30` for the full run) keeps a long-lived connection busy, opens a fresh connection every 4 seconds and a connect to a black hole every 11 seconds over a path with 3 % loss, duplication and repeats, and checks that nothing waits long.
-- H1 (versions) does not apply, H4 (open downlink with a fixed marker) is closed by the sealed downlink, H2 and H5 are about resolvers and can only be checked in the field.
+- H1 (versions) does not apply, H4 does not apply to the sealed downlink, H2 and H5 are about resolvers and can only be checked in the field.
 
 ## Changed files
 
@@ -157,7 +157,7 @@ Client (`mgdns.NewClient(ClientConfig)`): no TOML, no file, no listener (no SOCK
 | `internal/security/codec.go`, `encryption_key.go` (removed) | Cipher methods 0-5 and the shared `ENCRYPTION_KEY` / `encrypt_key.txt`. |
 | `internal/compression` (removed), `internal/vpnproto/payload.go` (removed) | Compression. |
 | `internal/vpnproto/builder.go`, `parser.go` | The inner packet has no session id, cookie, header check or compression byte; no codec in the parser. |
-| `internal/vpnproto/session_accept.go` | The ACCEPT policy block without the clear session id and cookie, the compression pair and minimum size. |
+| `internal/vpnproto/session_accept.go` | The ACCEPT policy block without the session id and cookie, the compression pair and minimum size. |
 | `internal/arq/arq.go` | Two changes: `PushTXPacket` and `Config` lose the compression type; `retransmitPriorityKinds` reads `sndNxt` under the lock (a data race with `ioLoop`, found by `go test -race` on the facade test). |
 | `internal/dnsparser/transport.go`, `response.go`, `respond.go` | Opaque response payload, TXT chunking over the whole frame, pointer owners, own OPT, no echo of options, flags, `BuildResponse`/`BuildTruncated`, random message IDs. |
 | `internal/domainmatcher/matcher.go` | `ActionRefused`; labels for every in-zone decision. |
