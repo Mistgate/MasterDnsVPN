@@ -253,11 +253,13 @@ func BuildTXTResponsePacket(questionPacket []byte, answerName string, answerPayl
 	return response, nil
 }
 
+// BuildVPNResponsePacket frames a clear inner packet. The server never calls it:
+// every production answer is a sealed frame passed to BuildVPNResponsePayload.
+// It remains for tests of the TXT chunking.
 func BuildVPNResponsePacket(questionPacket []byte, answerName string, packet VpnProto.Packet, baseEncode bool) ([]byte, error) {
 	rawFrame, err := VpnProto.BuildRawAuto(VpnProto.BuildOptions{
 		SessionID:       packet.SessionID,
 		PacketType:      packet.PacketType,
-		SessionCookie:   packet.SessionCookie,
 		StreamID:        packet.StreamID,
 		SequenceNum:     packet.SequenceNum,
 		FragmentID:      packet.FragmentID,
@@ -269,7 +271,10 @@ func BuildVPNResponsePacket(questionPacket []byte, answerName string, packet Vpn
 	if err != nil {
 		return nil, err
 	}
+	return BuildVPNResponsePayload(questionPacket, answerName, rawFrame, baseEncode)
+}
 
+func BuildVPNResponsePayload(questionPacket []byte, answerName string, rawFrame []byte, baseEncode bool) ([]byte, error) {
 	maxChunk := maxTXTAnswerPayload
 	if baseEncode {
 		maxChunk = maxTXTEncodedChunk
@@ -356,18 +361,28 @@ func sameDNSName(a string, b string) bool {
 	return strings.EqualFold(a, b)
 }
 
+// ExtractVPNResponse parses a clear inner packet from a response; production
+// code reads answers with ExtractVPNResponsePayload and then authenticates them.
 func ExtractVPNResponse(packet []byte, baseEncoded bool) (VpnProto.Packet, error) {
-	parsed, err := ParsePacket(packet)
+	raw, err := ExtractVPNResponsePayload(packet, baseEncoded)
 	if err != nil {
 		return VpnProto.Packet{}, err
+	}
+	return VpnProto.ParseInflated(raw)
+}
+
+func ExtractVPNResponsePayload(packet []byte, baseEncoded bool) ([]byte, error) {
+	parsed, err := ParsePacket(packet)
+	if err != nil {
+		return nil, err
 	}
 
 	rawAnswers := extractTXTAnswerPayloads(parsed)
 	if len(rawAnswers) == 0 {
-		return VpnProto.Packet{}, ErrTXTAnswerMissing
+		return nil, ErrTXTAnswerMissing
 	}
 
-	return assembleVPNResponse(rawAnswers, baseEncoded)
+	return assembleVPNResponsePayload(rawAnswers, baseEncoded)
 }
 
 func DescribeResponseWithoutTunnelPayload(packet []byte) string {
@@ -490,16 +505,9 @@ func buildTXTAnswerChunks(rawFrame []byte, baseEncode bool) ([][]byte, error) {
 		return [][]byte{buildTXTAnswerChunk(rawFrame, baseEncode)}, nil
 	}
 
-	header, err := VpnProto.Parse(rawFrame)
-	if err != nil {
-		return [][]byte{buildTXTAnswerChunk(rawFrame, baseEncode)}, nil
-	}
-
-	headerLen := header.HeaderLength
 	chunk0PrefixLen := 2
-	maxChunk0Data := max(maxChunk-chunk0PrefixLen-headerLen, 0)
-
-	remaining := len(header.Payload) - maxChunk0Data
+	maxChunk0Data := max(maxChunk-chunk0PrefixLen, 0)
+	remaining := len(rawFrame) - maxChunk0Data
 	maxChunkNData := maxChunk - 1
 	totalChunks := 1
 	if remaining > 0 {
@@ -510,20 +518,19 @@ func buildTXTAnswerChunks(rawFrame []byte, baseEncode bool) ([][]byte, error) {
 	}
 
 	chunks := make([][]byte, 0, totalChunks)
-	chunk0DataLen := min(maxChunk0Data, len(header.Payload))
-	rawChunk0 := make([]byte, 2+headerLen+chunk0DataLen)
+	chunk0DataLen := min(maxChunk0Data, len(rawFrame))
+	rawChunk0 := make([]byte, 2+chunk0DataLen)
 	rawChunk0[0] = 0x00
 	rawChunk0[1] = byte(totalChunks)
-	copy(rawChunk0[2:], rawFrame[:headerLen])
-	copy(rawChunk0[2+headerLen:], header.Payload[:chunk0DataLen])
+	copy(rawChunk0[2:], rawFrame[:chunk0DataLen])
 
 	if !baseEncode {
 		chunks = append(chunks, appendLengthPrefixedTXT(rawChunk0))
-		return appendRawTXTAnswerChunks(chunks, header.Payload, maxChunk0Data, maxChunkNData), nil
+		return appendRawTXTAnswerChunks(chunks, rawFrame, maxChunk0Data, maxChunkNData), nil
 	}
 
 	chunks = append(chunks, appendLengthPrefixedBase64TXT(rawChunk0))
-	return appendBase64TXTAnswerChunks(chunks, header.Payload, maxChunk0Data, maxChunkNData), nil
+	return appendBase64TXTAnswerChunks(chunks, rawFrame, maxChunk0Data, maxChunkNData), nil
 }
 
 func buildTXTAnswerChunk(data []byte, baseEncode bool) []byte {
@@ -655,29 +662,36 @@ func extractTXTBytes(rData []byte) []byte {
 }
 
 func assembleVPNResponse(rawAnswers [][]byte, baseEncoded bool) (VpnProto.Packet, error) {
+	raw, err := assembleVPNResponsePayload(rawAnswers, baseEncoded)
+	if err != nil {
+		return VpnProto.Packet{}, err
+	}
+	return VpnProto.ParseInflated(raw)
+}
+
+func assembleVPNResponsePayload(rawAnswers [][]byte, baseEncoded bool) ([]byte, error) {
 	if len(rawAnswers) == 1 {
 		raw := rawAnswers[0]
 		if baseEncoded {
 			decoded, err := baseCodec.DecodeRawBase64(raw)
 			if err != nil {
-				return VpnProto.Packet{}, err
+				return nil, err
 			}
 			raw = decoded
 		}
-		return VpnProto.ParseInflated(raw)
+		return append([]byte(nil), raw...), nil
 	}
 
 	var chunks [256][]byte
 	totalExpected := 0
 	seenChunks := 0
-	var header VpnProto.Packet
 	headerSeen := false
 
 	for _, raw := range rawAnswers {
 		if baseEncoded {
 			decoded, err := baseCodec.DecodeRawBase64(raw)
 			if err != nil {
-				return VpnProto.Packet{}, err
+				return nil, err
 			}
 			raw = decoded
 		}
@@ -687,28 +701,23 @@ func assembleVPNResponse(rawAnswers [][]byte, baseEncoded bool) (VpnProto.Packet
 
 		if raw[0] == 0x00 {
 			if len(raw) < 3 {
-				return VpnProto.Packet{}, ErrTXTAnswerMalformed
+				return nil, ErrTXTAnswerMalformed
 			}
 			totalExpected = int(raw[1])
 			if totalExpected <= 0 || totalExpected > len(chunks) {
-				return VpnProto.Packet{}, ErrTXTAnswerMalformed
+				return nil, ErrTXTAnswerMalformed
 			}
-			parsed, err := VpnProto.ParseAtOffset(raw, 2)
-			if err != nil {
-				return VpnProto.Packet{}, err
-			}
-			header = parsed
 			headerSeen = true
 			if chunks[0] == nil {
 				seenChunks++
 			}
-			chunks[0] = parsed.Payload
+			chunks[0] = raw[2:]
 			continue
 		}
 
 		chunkID := int(raw[0])
 		if chunkID >= len(chunks) {
-			return VpnProto.Packet{}, ErrTXTAnswerMalformed
+			return nil, ErrTXTAnswerMalformed
 		}
 		if chunks[chunkID] == nil {
 			seenChunks++
@@ -717,16 +726,16 @@ func assembleVPNResponse(rawAnswers [][]byte, baseEncoded bool) (VpnProto.Packet
 	}
 
 	if !headerSeen || totalExpected <= 0 || seenChunks != totalExpected {
-		return VpnProto.Packet{}, ErrTXTAnswerMalformed
+		return nil, ErrTXTAnswerMalformed
 	}
 	for i := range totalExpected {
 		if chunks[i] == nil {
-			return VpnProto.Packet{}, ErrTXTAnswerMalformed
+			return nil, ErrTXTAnswerMalformed
 		}
 	}
 	for i := totalExpected; i < len(chunks); i++ {
 		if chunks[i] != nil {
-			return VpnProto.Packet{}, ErrTXTAnswerMalformed
+			return nil, ErrTXTAnswerMalformed
 		}
 	}
 
@@ -739,8 +748,7 @@ func assembleVPNResponse(rawAnswers [][]byte, baseEncoded bool) (VpnProto.Packet
 	for i := range totalExpected {
 		payload = append(payload, chunks[i]...)
 	}
-	header.Payload = payload
-	return VpnProto.InflatePayload(header)
+	return payload, nil
 }
 
 func encodeDNSNameStrict(name string) ([]byte, error) {

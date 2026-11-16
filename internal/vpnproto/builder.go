@@ -7,12 +7,9 @@
 
 package vpnproto
 
-import "masterdnsvpn-go/internal/security"
-
 type BuildOptions struct {
 	SessionID       uint8
 	PacketType      uint8
-	SessionCookie   uint8
 	StreamID        uint16
 	SequenceNum     uint16
 	FragmentID      uint8
@@ -27,7 +24,7 @@ func BuildRaw(opts BuildOptions) ([]byte, error) {
 		return nil, ErrInvalidPacketType
 	}
 
-	headerLen := 2 + integrityLength // SessionID + PacketType + SessionCookie + Integrity
+	headerLen := 1 // PacketType
 	if flags&packetFlagStream != 0 {
 		headerLen += 2
 	}
@@ -42,9 +39,8 @@ func BuildRaw(opts BuildOptions) ([]byte, error) {
 	}
 
 	raw := make([]byte, headerLen+len(opts.Payload))
-	raw[0] = opts.SessionID
-	raw[1] = opts.PacketType
-	offset := 2
+	raw[0] = opts.PacketType
+	offset := 1
 
 	if flags&packetFlagStream != 0 {
 		raw[offset] = byte(opts.StreamID >> 8)
@@ -66,23 +62,8 @@ func BuildRaw(opts BuildOptions) ([]byte, error) {
 		offset++
 	}
 
-	raw[offset] = opts.SessionCookie
-	offset++
-	raw[offset] = computeHeaderCheckByte(raw[:offset])
-	offset++
 	copy(raw[offset:], opts.Payload)
 	return raw, nil
-}
-
-func BuildEncoded(opts BuildOptions, codec *security.Codec) (string, error) {
-	raw, err := BuildRaw(opts)
-	if err != nil {
-		return "", err
-	}
-	if codec == nil {
-		return "", ErrCodecUnavailable
-	}
-	return codec.EncryptAndEncode(raw)
 }
 
 func HeaderRawSize(packetType uint8) int {
@@ -91,7 +72,7 @@ func HeaderRawSize(packetType uint8) int {
 		return 0
 	}
 
-	size := 2 + integrityLength
+	size := 1
 	if flags&packetFlagStream != 0 {
 		size += 2
 	}

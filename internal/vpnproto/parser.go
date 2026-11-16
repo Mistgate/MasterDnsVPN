@@ -11,20 +11,15 @@ import (
 	"errors"
 
 	Enums "masterdnsvpn-go/internal/enums"
-	"masterdnsvpn-go/internal/security"
 )
 
 var (
-	ErrPacketTooShort     = errors.New("vpn packet too short")
-	ErrInvalidPacketType  = errors.New("invalid vpn packet type")
-	ErrInvalidHeaderCheck = errors.New("invalid vpn header check")
-	ErrInvalidEncodedData = errors.New("invalid encoded vpn labels")
-	ErrCodecUnavailable   = errors.New("vpn codec unavailable")
+	ErrPacketTooShort    = errors.New("vpn packet too short")
+	ErrInvalidPacketType = errors.New("invalid vpn packet type")
 )
 
 const (
-	integrityLength = 2
-	minHeaderLength = 4
+	minHeaderLength = 1
 
 	packetFlagValid = 1 << iota
 	packetFlagStream
@@ -35,34 +30,12 @@ const (
 
 var packetFlags = buildPacketFlags()
 
-// Header layout copied from the Python parser, with one change:
-// `total_data_length` has been removed from the fragment extension.
-//
-// Base header:
-//   [0] Session ID     (1 byte)
-//   [1] Packet Type    (1 byte)
-//
-// Optional extensions by packet type:
-//   Stream extension:
-//     [2..3] Stream ID         (2 bytes)
-//   Sequence extension:
-//     [+2]   Sequence Number   (2 bytes)
-//   Fragment extension:
-//     [+1]   Fragment ID       (1 byte)
-//     [+1]   Total Fragments   (1 byte)
-//   Compression extension:
-//     [+1]   Compression Type  (1 byte)
-//
-// Integrity footer:
-//   [+1] Session Cookie  (1 byte)
-//   [+1] Header Check    (1 byte)
-//
-// Payload starts immediately after the header check byte.
+// A v1 plaintext frame begins with the packet type and optional extensions.
+// The session ID and counter are in the authenticated outer envelope.
 
 type Packet struct {
-	SessionID     uint8
-	PacketType    uint8
-	SessionCookie uint8
+	SessionID  uint8
+	PacketType uint8
 
 	HasStreamID bool
 	StreamID    uint16
@@ -79,22 +52,6 @@ type Packet struct {
 
 	HeaderLength int
 	Payload      []byte
-}
-
-func ParseFromLabels(labels string, codec *security.Codec) (Packet, error) {
-	if codec == nil {
-		return Packet{}, ErrCodecUnavailable
-	}
-	if labels == "" {
-		return Packet{}, ErrInvalidEncodedData
-	}
-
-	raw, err := codec.DecodeStringAndDecrypt(labels)
-	if err != nil {
-		return Packet{}, err
-	}
-
-	return Parse(raw)
 }
 
 func Parse(data []byte) (Packet, error) {
@@ -114,14 +71,14 @@ func parseFrom(data []byte, start int) (Packet, error) {
 		return Packet{}, ErrPacketTooShort
 	}
 
-	packetType := data[1]
+	packetType := data[0]
 	flags := packetFlags[packetType]
 	if flags&packetFlagValid == 0 {
 		return Packet{}, ErrInvalidPacketType
 	}
 
 	// Fast-path length check
-	minLen := 2 + integrityLength
+	minLen := 1
 	if flags&packetFlagStream != 0 {
 		minLen += 2
 	}
@@ -140,11 +97,10 @@ func parseFrom(data []byte, start int) (Packet, error) {
 	}
 
 	packet := Packet{
-		SessionID:  data[0],
 		PacketType: packetType,
 	}
 
-	offset := 2
+	offset := 1
 	if flags&packetFlagStream != 0 {
 		packet.HasStreamID = true
 		packet.StreamID = (uint16(data[offset]) << 8) | uint16(data[offset+1])
@@ -170,25 +126,9 @@ func parseFrom(data []byte, start int) (Packet, error) {
 		offset++
 	}
 
-	packet.SessionCookie = data[offset]
-	checkByte := data[offset+1]
-	expected := computeHeaderCheckByte(data[:offset+1])
-	if checkByte != expected {
-		return Packet{}, ErrInvalidHeaderCheck
-	}
-
-	packet.HeaderLength = offset + integrityLength
+	packet.HeaderLength = offset
 	packet.Payload = data[packet.HeaderLength:]
 	return packet, nil
-}
-
-func computeHeaderCheckByte(header []byte) byte {
-	acc := byte(len(header)*17 + 0x5D)
-	for idx, value := range header {
-		acc += value + byte(idx)
-		acc ^= value << (idx & 0x03)
-	}
-	return acc
 }
 
 func hasStreamExtension(packetType uint8) bool {

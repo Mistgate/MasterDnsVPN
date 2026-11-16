@@ -11,7 +11,6 @@ import (
 	"errors"
 
 	"masterdnsvpn-go/internal/compression"
-	"masterdnsvpn-go/internal/security"
 )
 
 var ErrInvalidCompressedPayload = errors.New("invalid compressed vpn payload")
@@ -44,15 +43,6 @@ func InflatePayload(packet Packet) (Packet, error) {
 	return packet, nil
 }
 
-func ParseInflatedFromLabels(labels string, codec *security.Codec) (Packet, error) {
-	packet, err := ParseFromLabels(labels, codec)
-	if err != nil {
-		return Packet{}, err
-	}
-
-	return InflatePayload(packet)
-}
-
 func ParseInflated(data []byte) (Packet, error) {
 	packet, err := Parse(data)
 	if err != nil {
@@ -67,15 +57,4 @@ func BuildRawAuto(opts BuildOptions, minSize int) ([]byte, error) {
 	opts.Payload = payload
 	opts.CompressionType = compressionType
 	return BuildRaw(opts)
-}
-
-func BuildEncodedAuto(opts BuildOptions, codec *security.Codec, minSize int) (string, error) {
-	raw, err := BuildRawAuto(opts, minSize)
-	if err != nil {
-		return "", err
-	}
-	if codec == nil {
-		return "", ErrCodecUnavailable
-	}
-	return codec.EncryptAndEncode(raw)
 }

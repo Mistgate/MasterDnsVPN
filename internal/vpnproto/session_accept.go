@@ -7,33 +7,31 @@ import (
 )
 
 const (
-	SessionAcceptBasePayloadSize   = 7
 	SessionAcceptPolicyPayloadSize = 13
-	SessionAcceptPayloadSize       = SessionAcceptBasePayloadSize + SessionAcceptPolicyPayloadSize
+	SessionAcceptV1PolicySize      = 1 + 4 + SessionAcceptPolicyPayloadSize
 
 	SessionPolicyScaledMin = 0.05
 	SessionPolicyScaledMax = 1.0
 )
 
-// SessionAcceptPayload defines the full SESSION_ACCEPT payload:
+// SessionAcceptPayload holds the values carried in the encrypted v1 ACCEPT. The
+// plaintext of the ACCEPT is the session ID followed by the policy block:
 //
-//	byte 0      : session ID
-//	byte 1      : session cookie
-//	byte 2      : upload/download compression pair
-//	bytes 3-6   : verify code
-//	byte 7      : lower nibble = max packet duplication, upper nibble = max setup duplication
-//	byte 8      : max upload MTU
-//	bytes 9-10  : max download MTU
-//	byte 11     : max RX/TX workers
-//	byte 12     : min ping aggressive interval (scaled 0..255 => 0.05..1.00s)
-//	byte 13     : max packets per batch
-//	bytes 14-15 : max ARQ window size
-//	byte 16     : max ARQ data NACK max gap
-//	bytes 17-18 : min compression min size
-//	byte 19     : min ARQ initial RTO (scaled 0..255 => 0.05..1.00s)
+//	byte 0      : session ID (outside the policy block)
+//	byte 1      : upload/download compression pair
+//	bytes 2-5   : verify code
+//	byte 6      : lower nibble = max packet duplication, upper nibble = max setup duplication
+//	byte 7      : max upload MTU
+//	bytes 8-9   : max download MTU
+//	byte 10     : max RX/TX workers
+//	byte 11     : min ping aggressive interval (scaled 0..255 => 0.05..1.00s)
+//	byte 12     : max packets per batch
+//	bytes 13-14 : max ARQ window size
+//	byte 15     : max ARQ data NACK max gap
+//	bytes 16-17 : min compression min size
+//	byte 18     : min ARQ initial RTO (scaled 0..255 => 0.05..1.00s)
 type SessionAcceptPayload struct {
 	SessionID           uint8
-	SessionCookie       uint8
 	CompressionPair     uint8
 	VerifyCode          [4]byte
 	ClientPolicy        SessionAcceptClientPolicy
@@ -58,20 +56,18 @@ type SessionAcceptClientSettings struct {
 }
 
 // SessionAcceptClientPolicy defines the server-side client limits/minimums
-// appended to SESSION_ACCEPT after the legacy 7-byte prefix.
+// carried in the encrypted v1 ACCEPT policy, as a 13-byte block:
 //
-// Wire layout after the first 7 bytes:
-//
-//	byte 7  : lower nibble = max packet duplication, upper nibble = max setup duplication
-//	byte 8  : max upload MTU (uint8)
-//	bytes 9-10  : max download MTU (uint16, big endian)
-//	byte 11 : max RX/TX workers (uint8)
-//	byte 12 : min ping aggressive interval, scaled 0..255 => 0.05..1.00 seconds
-//	byte 13 : max packets per batch (uint8)
-//	bytes 14-15 : max ARQ window size (uint16, big endian)
-//	byte 16 : max ARQ data NACK max gap (uint8)
-//	bytes 17-18 : min compression min-size (uint16, big endian)
-//	byte 19 : min ARQ initial RTO, scaled 0..255 => 0.05..1.00 seconds
+//	byte 0      : lower nibble = max packet duplication, upper nibble = max setup duplication
+//	byte 1      : max upload MTU (uint8)
+//	bytes 2-3   : max download MTU (uint16, big endian)
+//	byte 4      : max RX/TX workers (uint8)
+//	byte 5      : min ping aggressive interval, scaled 0..255 => 0.05..1.00 seconds
+//	byte 6      : max packets per batch (uint8)
+//	bytes 7-8   : max ARQ window size (uint16, big endian)
+//	byte 9      : max ARQ data NACK max gap (uint8)
+//	bytes 10-11 : min compression min-size (uint16, big endian)
+//	byte 12     : min ARQ initial RTO, scaled 0..255 => 0.05..1.00 seconds
 type SessionAcceptClientPolicy struct {
 	MaxPacketDuplicationCount int
 	MaxSetupDuplicationCount  int
@@ -86,47 +82,32 @@ type SessionAcceptClientPolicy struct {
 	MinARQInitialRTOSeconds   float64
 }
 
-func EncodeSessionAcceptPayload(payload SessionAcceptPayload) []byte {
-	size := SessionAcceptBasePayloadSize
-	if payload.HasClientPolicySync {
-		size = SessionAcceptPayloadSize
-	}
-
-	buf := make([]byte, size)
-	buf[0] = payload.SessionID
-	buf[1] = payload.SessionCookie
-	buf[2] = payload.CompressionPair
-	copy(buf[3:7], payload.VerifyCode[:])
-
-	if payload.HasClientPolicySync {
-		policy := EncodeSessionAcceptClientPolicy(payload.ClientPolicy)
-		copy(buf[SessionAcceptBasePayloadSize:], policy[:])
-	}
-
+// EncodeSessionAcceptV1Policy encodes the policy carried after the encrypted
+// session ID in the v1 ACCEPT.
+func EncodeSessionAcceptV1Policy(payload SessionAcceptPayload) []byte {
+	buf := make([]byte, SessionAcceptV1PolicySize)
+	buf[0] = payload.CompressionPair
+	copy(buf[1:5], payload.VerifyCode[:])
+	policy := EncodeSessionAcceptClientPolicy(payload.ClientPolicy)
+	copy(buf[5:], policy[:])
 	return buf
 }
 
-func DecodeSessionAcceptPayload(payload []byte) (SessionAcceptPayload, error) {
-	if len(payload) < SessionAcceptBasePayloadSize {
-		return SessionAcceptPayload{}, fmt.Errorf("session accept payload too short: got=%d want>=%d", len(payload), SessionAcceptBasePayloadSize)
+func DecodeSessionAcceptV1Policy(sessionID uint8, policy []byte) (SessionAcceptPayload, error) {
+	if len(policy) != SessionAcceptV1PolicySize {
+		return SessionAcceptPayload{}, fmt.Errorf("invalid v1 session policy length: got=%d want=%d", len(policy), SessionAcceptV1PolicySize)
 	}
-
+	clientPolicy, err := DecodeSessionAcceptClientPolicy(policy[5:])
+	if err != nil {
+		return SessionAcceptPayload{}, err
+	}
 	result := SessionAcceptPayload{
-		SessionID:       payload[0],
-		SessionCookie:   payload[1],
-		CompressionPair: payload[2],
+		SessionID:           sessionID,
+		CompressionPair:     policy[0],
+		ClientPolicy:        clientPolicy,
+		HasClientPolicySync: true,
 	}
-	copy(result.VerifyCode[:], payload[3:7])
-
-	if len(payload) >= SessionAcceptPayloadSize {
-		policy, err := DecodeSessionAcceptClientPolicy(payload[SessionAcceptBasePayloadSize:SessionAcceptPayloadSize])
-		if err != nil {
-			return SessionAcceptPayload{}, err
-		}
-		result.ClientPolicy = policy
-		result.HasClientPolicySync = true
-	}
-
+	copy(result.VerifyCode[:], policy[1:5])
 	return result, nil
 }
 
