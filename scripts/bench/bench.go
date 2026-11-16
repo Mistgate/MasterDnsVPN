@@ -182,17 +182,15 @@ func runOnce(ctx context.Context, direction string, runIndex int) (BenchResult, 
 	// 2. Generate Configs
 	serverCfg, _ := filepath.Abs(filepath.Join(runtimeDir, "server_config.toml"))
 	clientCfg, _ := filepath.Abs(filepath.Join(runtimeDir, "client_config.toml"))
-	keyFile, _ := filepath.Abs(filepath.Join(runtimeDir, "encrypt_key.txt"))
-	_ = os.Remove(keyFile)
+	deviceCredential := "0102030405060708.0000000000000000000000000000000000000000000000000000000000000000"
 
 	os.WriteFile(serverCfg, []byte(fmt.Sprintf(`
 	PROTOCOL_TYPE = "TCP"
-	UDP_HOST = "0.0.0.0"
+	UDP_HOST = "127.0.0.1"
 	UDP_PORT = %d
-	DOMAIN = ["a.io"]
+	DOMAIN = ["a.example.com"]
 	MIN_VPN_LABEL_LENGTH = 1
-	DATA_ENCRYPTION_METHOD = 1
-	ENCRYPTION_KEY_FILE = "encrypt_key.txt"
+	DEVICE_CREDENTIAL = "%s"
 	FORWARD_IP = "127.0.0.1"
 	FORWARD_PORT = %d
 	MAX_PACKETS_PER_BATCH = 5
@@ -225,7 +223,7 @@ func runOnce(ctx context.Context, direction string, runIndex int) (BenchResult, 
 	ARQ_DATA_NACK_REPEAT_SECONDS = 0.8
 	ARQ_TERMINAL_DRAIN_TIMEOUT_SECONDS = 120.0
 	ARQ_TERMINAL_ACK_WAIT_TIMEOUT_SECONDS = 90.0
-	`, *serverPort, targetPort)), 0644)
+	`, *serverPort, deviceCredential, targetPort)), 0644)
 
 	// 3. Start Server
 	absServerBin, _ := filepath.Abs(filepath.Join(binDir, "server.exe"))
@@ -239,12 +237,10 @@ func runOnce(ctx context.Context, direction string, runIndex int) (BenchResult, 
 	}
 	defer serverCmd.Process.Kill()
 
-	if err := waitForFile(keyFile, 15*time.Second); err != nil {
+	if err := waitForPattern(serverLog, "Server Configuration Loaded", 15*time.Second); err != nil {
 		fmt.Printf("\n[ERROR] Server startup failed. Log:\n%s\n", serverLog.String())
 		return BenchResult{}, err
 	}
-	keyData, _ := os.ReadFile(keyFile)
-	encryptionKey := strings.TrimSpace(string(keyData))
 
 	// 4. Start Client
 	resolverFile, _ := filepath.Abs(filepath.Join(runtimeDir, "client_resolvers.txt"))
@@ -254,10 +250,9 @@ func runOnce(ctx context.Context, direction string, runIndex int) (BenchResult, 
 	PROTOCOL_TYPE = "TCP"
 	LISTEN_IP = "127.0.0.1"
 	LISTEN_PORT = %d
-	DOMAINS = ["a.io"]
-	ENCRYPTION_KEY = "%s"
+	DOMAINS = ["a.example.com"]
+	DEVICE_CREDENTIAL = "%s"
 	RESOLVER_BALANCING_STRATEGY = 1
-	DATA_ENCRYPTION_METHOD = 1
 	PACKET_DUPLICATION_COUNT = 1
 	SETUP_PACKET_DUPLICATION_COUNT = 1
 	MIN_UPLOAD_MTU = 120
@@ -303,7 +298,7 @@ func runOnce(ctx context.Context, direction string, runIndex int) (BenchResult, 
 	ARQ_MAX_CONTROL_RETRIES = 300
 	ARQ_DATA_NACK_INITIAL_DELAY_SECONDS = 0.35
 	ARQ_DATA_NACK_REPEAT_SECONDS = 0.8
-	`, *clientPort, encryptionKey)), 0644)
+	`, *clientPort, deviceCredential)), 0644)
 
 	absClientBin, _ := filepath.Abs(filepath.Join(binDir, "client.exe"))
 	clientCmd := exec.Command(absClientBin, "--config", clientCfg)
@@ -393,20 +388,6 @@ func persistRunLogs(direction string, runIndex int, serverLog, clientLog *safeBu
 		clientPath, _ := filepath.Abs(filepath.Join(runtimeDir, fmt.Sprintf("%s-run-%d-client.log", direction, runIndex)))
 		_ = os.WriteFile(clientPath, []byte(clientLog.String()), 0644)
 	}
-}
-
-func waitForFile(path string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(path); err == nil {
-			info, _ := os.Stat(path)
-			if info.Size() > 0 {
-				return nil
-			}
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-	return fmt.Errorf("timeout waiting for file: %s", path)
 }
 
 func waitForPattern(buf *safeBuffer, pattern string, timeout time.Duration) error {

@@ -731,49 +731,23 @@ if [[ -f "server_config.toml" ]] && grep -q '"v.domain.com"' server_config.toml;
 fi
 
 log_header "Security Initialization"
-log_info "Starting server once to generate encryption key..."
-EXECUTABLE_ARGS="-genkey -nowait"
-KEY_GENERATED=false
-
-# Try with -genkey -nowait (newest versions)
-if ./"$EXECUTABLE" $EXECUTABLE_ARGS > "$TMP_LOG" 2>&1; then
-  log_success "Key generated!"
-  KEY_GENERATED=true
+log_info "Enter the device credential as 16 hexadecimal KID characters, a dot, and 64 hexadecimal PSK characters."
+read -r -s -p ">>> Device credential: " DEVICE_CREDENTIAL </dev/tty || true
+echo
+if [[ ! "${DEVICE_CREDENTIAL:-}" =~ ^[[:xdigit:]]{16}\.[[:xdigit:]]{64}$ ]]; then
+  log_error "A valid device credential is required in kid.key form."
 fi
-
-# Try running normally to trigger key generation (older versions < commit 86d1d9d)
-if [[ "$KEY_GENERATED" != true ]]; then
-  ./"$EXECUTABLE" > "$TMP_LOG" 2>&1 &
-  APP_PID=$!
-  READY=false
-  for _ in {1..10}; do
-    if grep -q "Active Encryption Key" "$TMP_LOG" 2>/dev/null; then
-      READY=true
-      break
-    fi
-    sleep 1
-  done
-  kill "$APP_PID" 2>/dev/null || true
-  wait "$APP_PID" 2>/dev/null || true
-
-  if grep -q "Active Encryption Key" "$TMP_LOG" 2>/dev/null; then
-    READY=true
-  fi
-
-  if [[ "$READY" == true ]]; then
-    log_success "Key generated."
-    EXECUTABLE_ARGS=""
-    KEY_GENERATED=true
+tmp_config=$(mktemp)
+while IFS= read -r line; do
+  if [[ "$line" =~ ^DEVICE_CREDENTIAL[[:space:]]*= ]]; then
+    printf 'DEVICE_CREDENTIAL = "%s"\n' "$DEVICE_CREDENTIAL"
   else
-    log_warn "Initialization log tail:"
-    tail -n 20 "$TMP_LOG" || true
-    log_error "Could not verify key generation."
+    printf '%s\n' "$line"
   fi
-fi
-
-echo -e "${GREEN}${BOLD}------------------------------------------------------"
-echo -e "  YOUR ENCRYPTION KEY: ${NC}${CYAN}$(cat encrypt_key.txt 2>/dev/null)${NC}"
-echo -e "${GREEN}${BOLD}------------------------------------------------------${NC}"
+done < server_config.toml > "$tmp_config"
+mv -f "$tmp_config" server_config.toml
+unset DEVICE_CREDENTIAL
+EXECUTABLE_ARGS="-nowait"
 
 log_header "Installing System Service"
 SVC="/etc/systemd/system/masterdnsvpn.service"
@@ -823,7 +797,6 @@ echo -e "  ${YELLOW}>${NC} Restart: systemctl restart masterdnsvpn"
 echo -e "  ${YELLOW}>${NC} Logs:    journalctl -u masterdnsvpn -f"
 echo -e "\n${BOLD}Files:${NC}"
 echo -e "  ${YELLOW}>${NC} ${INSTALL_DIR}/server_config.toml"
-echo -e "  ${YELLOW}>${NC} ${INSTALL_DIR}/encrypt_key.txt"
 echo -e "${YELLOW}Final Note:${NC} If config changes, run: systemctl restart masterdnsvpn"
 
 rm -f *.spec >/dev/null 2>&1 || true

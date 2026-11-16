@@ -354,16 +354,14 @@ jobs:
           # Keep test settings out of the packaged configuration templates.
           smoke = Path("dist/smoke")
           smoke.mkdir(parents=True, exist_ok=True)
-          val = "0123456789abcdef0123456789abcdef"
+          val = "0102030405060708." + "0" * 64
           for f_name in ["client_config.toml", "server_config.toml"]:
               content = (Path("dist") / f_name).read_text(encoding="utf-8")
-              content = re.sub(r'ENCRYPTION_KEY\s*=\s*""', f'ENCRYPTION_KEY = "{val}"', content)
+              content = re.sub(r'DEVICE_CREDENTIAL\s*=\s*""', f'DEVICE_CREDENTIAL = "{val}"', content)
               if "server" in f_name:
-                  content = re.sub(r'ENCRYPTION_KEY_FILE\s*=\s*".*?"', 'ENCRYPTION_KEY_FILE = "encrypt_key.txt"', content)
                   content = re.sub(r'(?m)^UDP_HOST\s*=.*$', 'UDP_HOST = "127.0.0.1"', content)
                   content = re.sub(r'(?m)^UDP_PORT\s*=.*$', 'UDP_PORT = 15353', content)
               (smoke / f_name).write_text(content, encoding="utf-8")
-          (smoke / "encrypt_key.txt").write_text(val, encoding="utf-8")
           (smoke / "client_resolvers.txt").write_text("127.0.0.1:15353\n", encoding="utf-8")
           PY
 

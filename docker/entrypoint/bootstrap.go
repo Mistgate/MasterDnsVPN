@@ -13,8 +13,7 @@ import (
 )
 
 type settings struct {
-	appDir, dataDir, configFile, keyFile, domain, template string
-	keyFileExplicit                                        bool
+	appDir, dataDir, configFile, domain, template string
 }
 
 type command struct {
@@ -30,19 +29,16 @@ func environmentSettings() settings {
 		return fallback
 	}
 	return settings{
-		appDir:          value("APP_DIR", "/opt/masterdnsvpn"),
-		dataDir:         value("DATA_DIR", "/data"),
-		configFile:      value("CONFIG_FILE", "server_config.toml"),
-		keyFile:         value("KEY_FILE", "encrypt_key.txt"),
-		keyFileExplicit: os.Getenv("KEY_FILE") != "",
-		domain:          strings.TrimSpace(os.Getenv("DOMAIN")),
-		template:        "/usr/share/masterdnsvpn/server_config.toml.simple",
+		appDir:     value("APP_DIR", "/opt/masterdnsvpn"),
+		dataDir:    value("DATA_DIR", "/data"),
+		configFile: value("CONFIG_FILE", "server_config.toml"),
+		domain:     strings.TrimSpace(os.Getenv("DOMAIN")),
+		template:   "/usr/share/masterdnsvpn/server_config.toml.simple",
 	}
 }
 
-// prepare restores persistent state and uses the server itself to validate or
-// generate the encryption key, keeping all encryption modes consistent.
-func prepare(s settings, args []string, generate func(command) error) (command, error) {
+// prepare restores persistent configuration and builds the server command.
+func prepare(s settings, args []string) (command, error) {
 	overrides, args, err := pathOverrides(args)
 	if err != nil {
 		return command{}, err
@@ -92,8 +88,7 @@ func prepare(s settings, args []string, generate func(command) error) (command, 
 		configName = jsonFile
 	}
 	if encoded != "" {
-		// Base64 configs resolve relative keys against the working directory.
-		// Store the decoded file there, independent of any -config override.
+		// Store decoded configs in the server's normal JSON fallback path.
 		configName = jsonFallbackPath(filepath.Base(s.configFile))
 	}
 	configPath := resolvePath(s.appDir, configName)
@@ -159,71 +154,13 @@ func prepare(s settings, args []string, generate func(command) error) (command, 
 	} else if err != nil {
 		return command{}, err
 	}
-	configData, err := os.ReadFile(configPath)
-	if err != nil {
-		return command{}, err
-	}
-	var keyConfig struct {
-		File string `toml:"ENCRYPTION_KEY_FILE" json:"ENCRYPTION_KEY_FILE"`
-	}
-	if strings.EqualFold(filepath.Ext(configPath), ".json") {
-		var document map[string]json.RawMessage
-		err = json.Unmarshal(configData, &document)
-		if err == nil {
-			if value, ok := document["ENCRYPTION_KEY_FILE"]; ok {
-				err = json.Unmarshal(value, &keyConfig.File)
-			}
-		}
-	} else {
-		_, err = toml.Decode(string(configData), &keyConfig)
-	}
-	if err != nil {
-		return command{}, fmt.Errorf("read encryption key path from configuration: %w", err)
-	}
-	keyName := keyConfig.File
-	if keyName == "" {
-		keyName = "encrypt_key.txt"
-	}
-	keyPath := resolvePath(filepath.Dir(configPath), keyName)
-	if s.keyFileExplicit {
-		keyPath = resolvePath(s.appDir, s.keyFile)
-	}
-	if overrides.key != "" {
-		keyPath = resolvePath(filepath.Dir(configPath), overrides.key)
-	}
-	persistedKey := persistentPath(s, keyPath)
-	if err := copyFile(persistedKey, keyPath, 0600); err != nil && !os.IsNotExist(err) {
-		return command{}, fmt.Errorf("restore encryption key: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(keyPath), 0755); err != nil {
-		return command{}, err
-	}
-
 	launch := command{
 		path: bin,
 		dir:  s.appDir,
-		args: append([]string{"-nowait", "-config", configPath, "-encryption-key-file", keyPath}, args...),
+		args: append([]string{"-nowait", "-config", configPath}, args...),
 	}
-	keygen := launch
-	keygen.args = append([]string(nil), launch.args...)
-	insertAt := len(keygen.args)
-	for i, arg := range keygen.args {
-		if arg == "--" {
-			insertAt = i
-			break
-		}
-	}
-	keygen.args = append(keygen.args[:insertAt], append([]string{"-genkey"}, keygen.args[insertAt:]...)...)
-	if err := generate(keygen); err != nil {
-		return command{}, fmt.Errorf("initialize server encryption key: %w", err)
-	}
-	for _, file := range []struct {
-		active, persistent string
-		mode               os.FileMode
-	}{{configPath, persistedConfig, 0644}, {keyPath, persistedKey, 0600}} {
-		if err := copyFile(file.active, file.persistent, file.mode); err != nil {
-			return command{}, fmt.Errorf("persist %s: %w", filepath.Base(file.active), err)
-		}
+	if err := copyFile(configPath, persistedConfig, 0644); err != nil {
+		return command{}, fmt.Errorf("persist %s: %w", filepath.Base(configPath), err)
 	}
 	return launch, nil
 }
@@ -257,11 +194,11 @@ func jsonFallbackPath(path string) string {
 }
 
 type configOverrides struct {
-	config, key, jsonFile, jsonShort, jsonBase64, jsonBase64Alias string
+	config, jsonFile, jsonShort, jsonBase64, jsonBase64Alias string
 }
 
-// Canonicalize path flags once so generation, persistence and the running
-// server all use the same files. The remaining server options retain order.
+// Canonicalize config flags once so persistence and the running server use the
+// same files. The remaining server options retain order.
 func pathOverrides(args []string) (overrides configOverrides, remaining []string, err error) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -276,7 +213,7 @@ func pathOverrides(args []string) (overrides configOverrides, remaining []string
 		name, value, hasValue := strings.Cut(arg, "=")
 		name = strings.TrimPrefix(strings.TrimPrefix(name, "-"), "-")
 		switch name {
-		case "config", "encryption-key-file", "json", "j", "json_base64", "json-base64":
+		case "config", "json", "j", "json_base64", "json-base64":
 			if !hasValue {
 				i++
 				if i == len(args) {
@@ -284,14 +221,12 @@ func pathOverrides(args []string) (overrides configOverrides, remaining []string
 				}
 				value = args[i]
 			}
-			if value == "" && (name == "config" || name == "encryption-key-file") {
+			if value == "" && name == "config" {
 				return overrides, nil, fmt.Errorf("-%s requires a nonempty path", name)
 			}
 			switch name {
 			case "config":
 				overrides.config = value
-			case "encryption-key-file":
-				overrides.key = value
 			case "json":
 				overrides.jsonFile = value
 			case "j":

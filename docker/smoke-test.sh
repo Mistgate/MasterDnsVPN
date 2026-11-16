@@ -6,13 +6,13 @@ PLATFORM="${2:?Usage: smoke-test.sh IMAGE PLATFORM}"
 VOLUME="masterdnsvpn-smoke-${RANDOM}-${RANDOM}"
 CONTAINER=""
 TEST_DIR="$(mktemp -d)"
+TEST_CREDENTIAL="0102030405060708.0000000000000000000000000000000000000000000000000000000000000000"
 
 cleanup() {
   if [[ -n "${CONTAINER}" ]]; then
     docker rm -f "${CONTAINER}" >/dev/null 2>&1 || true
   fi
   docker volume rm "${VOLUME}" >/dev/null 2>&1 || true
-  rm -f "${TEST_DIR}/first.key" "${TEST_DIR}/second.key"
   rmdir "${TEST_DIR}" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -46,18 +46,16 @@ stop_cleanly() {
 docker volume create "${VOLUME}" >/dev/null
 CONTAINER="$(docker run -d --platform "${PLATFORM}" --network none \
   -e DOMAIN=smoke.example.com -v "${VOLUME}:/data" "${IMAGE}" \
-  -udp-host 127.0.0.1 -udp-port 15353)"
+  -udp-host 127.0.0.1 -udp-port 15353 -device-credential "${TEST_CREDENTIAL}")"
 wait_until_ready
-docker cp "${CONTAINER}:/data/encrypt_key.txt" "${TEST_DIR}/first.key"
 stop_cleanly
 docker rm "${CONTAINER}" >/dev/null
 CONTAINER=""
 
 # A fresh container must reuse /data without DOMAIN or access to GitHub.
 CONTAINER="$(docker run -d --platform "${PLATFORM}" --network none \
-  -v "${VOLUME}:/data" "${IMAGE}" -udp-host 127.0.0.1 -udp-port 15353)"
+  -v "${VOLUME}:/data" "${IMAGE}" -udp-host 127.0.0.1 -udp-port 15353 \
+  -device-credential "${TEST_CREDENTIAL}")"
 wait_until_ready
-docker cp "${CONTAINER}:/data/encrypt_key.txt" "${TEST_DIR}/second.key"
-cmp "${TEST_DIR}/first.key" "${TEST_DIR}/second.key"
 stop_cleanly
-echo "${PLATFORM}: offline first boot, persisted restart, key reuse and SIGTERM passed."
+echo "${PLATFORM}: offline first boot, persisted config restart and SIGTERM passed."
