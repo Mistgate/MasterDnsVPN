@@ -12,25 +12,25 @@ import (
 
 // RankedPersistenceConfig tunes the background writer behavior.
 type RankedPersistenceConfig struct {
-	Enabled         bool
-	ResolversPath   string
-	MaxRanked       int
-	CoalesceDelay   time.Duration
-	MaxDirtyWait    time.Duration
+	Enabled          bool
+	ResolversPath    string
+	MaxRanked        int
+	CoalesceDelay    time.Duration
+	MaxDirtyWait     time.Duration
 	MinWriteInterval time.Duration
-	RetryBackoff    time.Duration
-	MaxRetryBackoff time.Duration
+	RetryBackoff     time.Duration
+	MaxRetryBackoff  time.Duration
 }
 
 func defaultRankedPersistenceConfig() RankedPersistenceConfig {
 	return RankedPersistenceConfig{
-		Enabled:         true,
-		MaxRanked:       32,
-		CoalesceDelay:   200 * time.Millisecond,
-		MaxDirtyWait:    2 * time.Second,
+		Enabled:          true,
+		MaxRanked:        32,
+		CoalesceDelay:    200 * time.Millisecond,
+		MaxDirtyWait:     2 * time.Second,
 		MinWriteInterval: 30 * time.Second,
-		RetryBackoff:    500 * time.Millisecond,
-		MaxRetryBackoff: 4 * time.Second,
+		RetryBackoff:     500 * time.Millisecond,
+		MaxRetryBackoff:  4 * time.Second,
 	}
 }
 

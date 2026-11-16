@@ -852,7 +852,7 @@ func TestDialTCPTargetContextPassesEffectiveDeadlineToDialer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	_, _ = s.dialTCPTargetContext(ctx, "", "149.154.167.92:443")
+	_, _ = s.dialTCPTargetContext(ctx, "", "198.51.100.92:443")
 	if received <= 0 || received > 200*time.Millisecond {
 		t.Fatalf("expected effective dial timeout to follow context deadline, got %s", received)
 	}

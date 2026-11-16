@@ -465,11 +465,11 @@ func TestEmpirical_ActiveStandbyMutualExclusivity(t *testing.T) {
 }
 
 // TestEmpirical_RuntimeStats_MonotonicCounterGating tests:
-// 1. Monotonicity of totalPacketsSent under high concurrency (multiple worker goroutines).
-// 2. Ensuring that when individual connection stats are halved by applyHalfLife() (threshold 1000),
-//    totalPacketsSent NEVER drops or fluctuates.
-// 3. Ensuring that periodic runtime stats gating (currentSentTotal > lastSentTotal) is never suppressed
-//    or stalled by half-life decay.
+//  1. Monotonicity of totalPacketsSent under high concurrency (multiple worker goroutines).
+//  2. Ensuring that when individual connection stats are halved by applyHalfLife() (threshold 1000),
+//     totalPacketsSent NEVER drops or fluctuates.
+//  3. Ensuring that periodic runtime stats gating (currentSentTotal > lastSentTotal) is never suppressed
+//     or stalled by half-life decay.
 func TestEmpirical_RuntimeStats_MonotonicCounterGating(t *testing.T) {
 	b := NewBalancer(BalancingLossThenLatency, nil)
 	const numResolvers = 5
@@ -580,11 +580,11 @@ func TestEmpirical_RuntimeStats_MonotonicCounterGating(t *testing.T) {
 }
 
 // TestEmpirical_MicroBurst_PacingAndQueueDelayElimination empirically verifies:
-// 1. Queries are paced at 2ms intervals to prevent local buffer saturation.
-// 2. The concurrent receiver reads responses as they arrive without waiting for the sender
-//    loop to finish, eliminating local socket buffer queue delay.
-// 3. Thread safety between sender (itemMu write) and receiver (itemMu read).
-// 4. Clean completion and bounded goroutine lifecycle via senderDone.
+//  1. Queries are paced at 2ms intervals to prevent local buffer saturation.
+//  2. The concurrent receiver reads responses as they arrive without waiting for the sender
+//     loop to finish, eliminating local socket buffer queue delay.
+//  3. Thread safety between sender (itemMu write) and receiver (itemMu read).
+//  4. Clean completion and bounded goroutine lifecycle via senderDone.
 func TestEmpirical_MicroBurst_PacingAndQueueDelayElimination(t *testing.T) {
 	domain := "example.com"
 	server, addr := startMockBurstServer(t, domain, 0, 0) // immediate response
@@ -960,16 +960,16 @@ func TestEmpirical_MTU_BatchStandbyEligibilityPreserved_UDP(t *testing.T) {
 // qualifiedEndpoints[conn.ResolverLabel].
 //
 // Scenario:
-// 1. Two domains (d1.example.com, d2.example.com) share the same physical DNS resolver endpoint (127.0.0.1:53).
-// 2. Both connections (conn1 for d1, conn2 for d2) have completed MTU probes and are initially active.
-// 3. During micro-burst qualification, conn1 qualifies (added to qualifiedKeys and qualifiedEndpoints).
-// 4. conn2 fails micro-burst qualification (not in qualifiedKeys).
-// 5. Because both share conn.ResolverLabel ("127.0.0.1:53"), qualifiedEndpoints[conn2.ResolverLabel] is TRUE!
-// 6. With PR 205 fix: fast-start trimming checks qualifiedKeys[conn.Key].
-//    conn2 is strictly trimmed (IsValid=false, StandbyEligible=false).
-//    conn1 remains active (IsValid=true).
-// 7. Counter-factual verification: verifies that if qualifiedEndpoints were used, conn2 would erroneously
-//    survive trimming despite failing qualification on its domain.
+//  1. Two domains (d1.example.com, d2.example.com) share the same physical DNS resolver endpoint (127.0.0.1:53).
+//  2. Both connections (conn1 for d1, conn2 for d2) have completed MTU probes and are initially active.
+//  3. During micro-burst qualification, conn1 qualifies (added to qualifiedKeys and qualifiedEndpoints).
+//  4. conn2 fails micro-burst qualification (not in qualifiedKeys).
+//  5. Because both share conn.ResolverLabel ("127.0.0.1:53"), qualifiedEndpoints[conn2.ResolverLabel] is TRUE!
+//  6. With PR 205 fix: fast-start trimming checks qualifiedKeys[conn.Key].
+//     conn2 is strictly trimmed (IsValid=false, StandbyEligible=false).
+//     conn1 remains active (IsValid=true).
+//  7. Counter-factual verification: verifies that if qualifiedEndpoints were used, conn2 would erroneously
+//     survive trimming despite failing qualification on its domain.
 func TestEmpirical_MTU_StrictKeyTrimmingMultiDomain(t *testing.T) {
 	domain1 := "d1.example.com"
 	domain2 := "d2.example.com"
@@ -1051,10 +1051,10 @@ func TestEmpirical_MTU_StrictKeyTrimmingMultiDomain(t *testing.T) {
 }
 
 // TestEmpirical_RecheckRevokesStandby_NoRaceWithOptimize verifies that:
-// 1. recheckInactiveResolver immediately revokes StandbyEligible before initiating network probes.
-// 2. High-frequency concurrent calls to OptimizeActivePool() cannot race to promote the degraded/failing
-//    standby candidate into the active pool while health probing is in flight.
-// 3. Zero data races and zero deadlocks occur under concurrent stress.
+//  1. recheckInactiveResolver immediately revokes StandbyEligible before initiating network probes.
+//  2. High-frequency concurrent calls to OptimizeActivePool() cannot race to promote the degraded/failing
+//     standby candidate into the active pool while health probing is in flight.
+//  3. Zero data races and zero deadlocks occur under concurrent stress.
 func TestEmpirical_RecheckRevokesStandby_NoRaceWithOptimize(t *testing.T) {
 	domain := "v.example.com"
 

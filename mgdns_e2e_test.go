@@ -12,6 +12,7 @@ import (
 	mrand "math/rand"
 	"net"
 	"net/netip"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -407,6 +408,44 @@ func TestFacadeEndToEnd(t *testing.T) {
 	}
 	if _, ok := s.creds.Load("0102030405060708"); !ok {
 		t.Fatal("the Dial hook did not receive the credential id")
+	}
+}
+
+// In library mode the client opens no listener and writes no file: the SOCKS
+// and DNS ports of the standalone defaults stay free and the working directory
+// stays empty while a session is up.
+func TestFacadeClientOpensNoListenerAndWritesNoFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	echo := startEcho(t)
+	s := startServer(t, echo, nil)
+	s.server.SetCredentialIndex(index(t, e2eCredential))
+	client := startClient(t, e2eCredential, newRelay(t, s.server, "198.51.100.7:53000"))
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	conn, err := client.DialContext(ctx, "tcp", "echo.test:7007")
+	if err != nil {
+		t.Fatal(err)
+	}
+	echoRoundTrip(t, conn, 4<<10)
+	if _, err := client.ResolveDNS(ctx, dnsQuery("example.org")); err != nil {
+		t.Fatal(err)
+	}
+	for _, address := range []string{"127.0.0.1:18000"} {
+		listener, err := net.Listen("tcp", address)
+		if err != nil {
+			t.Errorf("%s is taken while the library client runs: %v", address, err)
+			continue
+		}
+		listener.Close()
+	}
+	conn.Close()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("the library client wrote files: %v", entries)
 	}
 }
 
